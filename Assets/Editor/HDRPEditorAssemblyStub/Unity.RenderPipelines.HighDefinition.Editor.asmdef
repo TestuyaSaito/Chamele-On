@@ -1,0 +1,11 @@
+{
+  "name": "Unity.RenderPipelines.HighDefinition.Editor",
+  "rootNamespace": "ChameleON.PackageCompatibility",
+  "includePlatforms": [
+    "Editor"
+  ],
+  "autoReferenced": false,
+  "defineConstraints": [
+    "!HDRP_1_OR_NEWER"
+  ]
+}
