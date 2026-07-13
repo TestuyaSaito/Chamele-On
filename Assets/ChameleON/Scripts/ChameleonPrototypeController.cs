@@ -72,6 +72,9 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
     private int activeTouchId = -1;
     private bool touchStartedOnBody;
     private float lastManualCameraInputTime = -10f;
+    private bool hasLatchedMovementHeading;
+    private float latchedMovementHeadingYaw;
+    private float lastMovementInputAngle;
 
     private Material floorMaterial;
     private Material wallMaterial;
@@ -610,6 +613,11 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
 
         if (attached)
         {
+            hasLatchedMovementHeading = false;
+            if (cameraRig != null)
+            {
+                cameraRig.ClearMovementHeading();
+            }
             mannequin.SetLocomotion(0f);
             Vector3 surfaceRight = Vector3.Cross(Vector3.up, attachedNormal).normalized;
             Vector3 delta = (surfaceRight * horizontal + Vector3.up * vertical) * (2.1f * Time.deltaTime);
@@ -622,13 +630,37 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
         Vector3 cameraForward = cameraRig != null
             ? cameraRig.PlanarForward
             : Vector3.ProjectOnPlane(gameCamera.transform.forward, Vector3.up).normalized;
-        Vector3 cameraRight = cameraRig != null
-            ? cameraRig.PlanarRight
-            : Vector3.ProjectOnPlane(gameCamera.transform.right, Vector3.up).normalized;
-        Vector3 movement = cameraForward * vertical + cameraRight * horizontal;
-        if (movement.sqrMagnitude > 1f)
+        Vector2 movementInput = Vector2.ClampMagnitude(new Vector2(horizontal, vertical), 1f);
+        float movementStrength = movementInput.magnitude;
+        Vector3 movement = Vector3.zero;
+        if (movementStrength > 0.14f)
         {
-            movement.Normalize();
+            float inputAngle = Mathf.Atan2(movementInput.x, movementInput.y) * Mathf.Rad2Deg;
+            if (!hasLatchedMovementHeading)
+            {
+                // Latch a world heading when movement starts. This lets the camera
+                // turn behind that heading without feeding its own rotation back
+                // into movement and making the player run in circles.
+                float cameraHeading = Mathf.Atan2(cameraForward.x, cameraForward.z) * Mathf.Rad2Deg;
+                latchedMovementHeadingYaw = cameraHeading + inputAngle;
+                lastMovementInputAngle = inputAngle;
+                hasLatchedMovementHeading = true;
+            }
+            else
+            {
+                float inputAngleDelta = Mathf.DeltaAngle(lastMovementInputAngle, inputAngle);
+                if (Mathf.Abs(inputAngleDelta) >= 6f)
+                {
+                    latchedMovementHeadingYaw += inputAngleDelta;
+                    lastMovementInputAngle = inputAngle;
+                }
+            }
+
+            movement = Quaternion.Euler(0f, latchedMovementHeadingYaw, 0f) * Vector3.forward * movementStrength;
+        }
+        else
+        {
+            hasLatchedMovementHeading = false;
         }
 
         if (characterController.isGrounded)
@@ -648,10 +680,18 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
         {
             Quaternion target = Quaternion.LookRotation(movement, Vector3.up);
             playerRoot.rotation = Quaternion.Slerp(playerRoot.rotation, target, Time.deltaTime * 10f);
-            if (cameraRig == null && Time.unscaledTime - lastManualCameraInputTime > 1.15f)
+            if (cameraRig != null)
+            {
+                cameraRig.SetMovementHeading(latchedMovementHeadingYaw, movementStrength);
+            }
+            else if (Time.unscaledTime - lastManualCameraInputTime > 1.15f)
             {
                 cameraYaw = Mathf.LerpAngle(cameraYaw, target.eulerAngles.y, Time.deltaTime * 2.3f);
             }
+        }
+        else if (cameraRig != null)
+        {
+            cameraRig.ClearMovementHeading();
         }
     }
 
@@ -1009,10 +1049,12 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
 
         if (painting)
         {
+            hasLatchedMovementHeading = false;
             cameraYaw = playerRoot.eulerAngles.y;
             cameraPitch = 9f;
             if (cameraRig != null)
             {
+                cameraRig.ClearMovementHeading();
                 cameraRig.SetFocusedMode(true);
                 cameraRig.SetLegacyPointerInputEnabled(false);
                 RefreshCameraComposition(false);

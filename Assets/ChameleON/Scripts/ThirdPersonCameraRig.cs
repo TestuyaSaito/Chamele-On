@@ -32,6 +32,13 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
     [SerializeField] private float orbitSmoothTime = 0.055f;
     [SerializeField] private float targetSmoothTime = 0.035f;
 
+    [Header("Movement Follow (Mobile Assist)")]
+    [SerializeField] private bool followMovementHeading = true;
+    [SerializeField] private float movementFollowDelay = 0.60f;
+    [SerializeField] private float movementFollowSpeed = 110f;
+    [SerializeField] private float movementFollowDeadZone = 3.5f;
+    [SerializeField] private float movementFollowMinimumStrength = 0.15f;
+
     [Header("Collision")]
     [SerializeField] private LayerMask collisionMask = ~0;
     [SerializeField] private float collisionRadius = 0.24f;
@@ -56,6 +63,7 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
     private bool attachedMode;
     private bool mouseDragging;
     private bool mouseDragBlocked;
+    private bool movementFollowActive;
     private int orbitTouchId = -1;
 
     private float desiredYaw;
@@ -67,6 +75,9 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
     private float currentDistance;
     private float distanceVelocity;
     private float fieldOfViewVelocity;
+    private float movementHeadingYaw;
+    private float movementStrength;
+    private float manualOrbitGraceRemaining;
     private Vector3 smoothedTargetPosition;
     private Vector3 targetPositionVelocity;
     private Vector2 queuedOrbitDegrees;
@@ -76,6 +87,17 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
     public Transform Target => followTarget;
     public float Yaw => desiredYaw;
     public float Pitch => desiredPitch;
+    public bool IsFollowingMovement => movementFollowActive;
+    public float MovementHeadingYaw => movementHeadingYaw;
+
+    public void SetMovementFollowEnabled(bool isEnabled)
+    {
+        followMovementHeading = isEnabled;
+        if (!isEnabled)
+        {
+            ClearMovementHeading();
+        }
+    }
 
     /// <summary>Camera-relative forward projected onto the horizontal plane.</summary>
     public Vector3 PlanarForward
@@ -127,6 +149,10 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
         drivenCamera.fieldOfView = GetModeFieldOfView();
         fieldOfViewVelocity = 0f;
         queuedOrbitDegrees = Vector2.zero;
+        movementFollowActive = false;
+        movementHeadingYaw = desiredYaw;
+        movementStrength = 0f;
+        manualOrbitGraceRemaining = 0f;
 
         ApplyCameraPose(0f, true);
     }
@@ -154,6 +180,28 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
     public void SetAttachedMode(bool isAttached)
     {
         attachedMode = isAttached;
+        if (isAttached)
+        {
+            ClearMovementHeading();
+        }
+    }
+
+    /// <summary>
+    /// Supplies the character's intended world-space travel heading. When the
+    /// player is not manually orbiting, the camera eases behind this heading.
+    /// </summary>
+    public void SetMovementHeading(float worldYaw, float strength)
+    {
+        movementHeadingYaw = NormalizeSignedAngle(worldYaw);
+        movementStrength = Mathf.Clamp01(strength);
+        movementFollowActive = followMovementHeading && movementStrength >= movementFollowMinimumStrength;
+    }
+
+    /// <summary>Stops automatic yaw changes until a new movement heading arrives.</summary>
+    public void ClearMovementHeading()
+    {
+        movementFollowActive = false;
+        movementStrength = 0f;
     }
 
     public void SetTargetOffset(Vector3 worldOffset, bool snapImmediately)
@@ -184,9 +232,10 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
     /// </summary>
     public void AddOrbitInput(Vector2 orbitDeltaDegrees)
     {
-        if (orbitEnabled)
+        if (orbitEnabled && orbitDeltaDegrees.sqrMagnitude > 0.000001f)
         {
             queuedOrbitDegrees += orbitDeltaDegrees;
+            manualOrbitGraceRemaining = movementFollowDelay;
         }
     }
 
@@ -224,7 +273,21 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
         desiredPitch = ClampPitch(desiredPitch + queuedOrbitDegrees.y);
         queuedOrbitDegrees = Vector2.zero;
 
-        ApplyCameraPose(Mathf.Max(0f, deltaTime), false);
+        float safeDeltaTime = Mathf.Max(0f, deltaTime);
+        if (manualOrbitGraceRemaining > 0f)
+        {
+            manualOrbitGraceRemaining = Mathf.Max(0f, manualOrbitGraceRemaining - safeDeltaTime);
+            if (manualOrbitGraceRemaining <= 0f)
+            {
+                FollowMovementHeading(safeDeltaTime);
+            }
+        }
+        else
+        {
+            FollowMovementHeading(safeDeltaTime);
+        }
+
+        ApplyCameraPose(safeDeltaTime, false);
     }
 
     /// <summary>Immediately places the camera at its current desired orbit.</summary>
@@ -380,6 +443,27 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
         drivenCamera.transform.SetPositionAndRotation(cameraPosition, cameraRotation);
     }
 
+    private void FollowMovementHeading(float deltaTime)
+    {
+        if (!movementFollowActive || !followMovementHeading || focusedMode || attachedMode ||
+            !orbitEnabled || deltaTime <= 0f)
+        {
+            return;
+        }
+
+        float yawError = Mathf.DeltaAngle(desiredYaw, movementHeadingYaw);
+        float remainingError = Mathf.Abs(yawError) - movementFollowDeadZone;
+        if (remainingError <= 0f)
+        {
+            return;
+        }
+
+        float normalizedStrength = Mathf.InverseLerp(movementFollowMinimumStrength, 1f, movementStrength);
+        float speedScale = Mathf.Lerp(0.55f, 1f, normalizedStrength);
+        float maximumStep = Mathf.Min(remainingError, movementFollowSpeed * speedScale * deltaTime);
+        desiredYaw = Mathf.MoveTowardsAngle(desiredYaw, movementHeadingYaw, maximumStep);
+    }
+
     private float FindSafeDistance(Vector3 origin, Vector3 direction, float requestedDistance)
     {
         float radius = Mathf.Max(collisionRadius, CalculateNearPlaneRadius());
@@ -492,6 +576,10 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
         attachedShoulderOffset = Mathf.Clamp(attachedShoulderOffset, -0.8f, 0.8f);
         orbitSmoothTime = Mathf.Max(0.001f, orbitSmoothTime);
         targetSmoothTime = Mathf.Max(0.001f, targetSmoothTime);
+        movementFollowDelay = Mathf.Max(0f, movementFollowDelay);
+        movementFollowSpeed = Mathf.Max(1f, movementFollowSpeed);
+        movementFollowDeadZone = Mathf.Clamp(movementFollowDeadZone, 0f, 45f);
+        movementFollowMinimumStrength = Mathf.Clamp01(movementFollowMinimumStrength);
         collisionReleaseSmoothTime = Mathf.Max(0.001f, collisionReleaseSmoothTime);
         normalFieldOfView = Mathf.Clamp(normalFieldOfView, 15f, 100f);
         focusedFieldOfView = Mathf.Clamp(focusedFieldOfView, 15f, 100f);
