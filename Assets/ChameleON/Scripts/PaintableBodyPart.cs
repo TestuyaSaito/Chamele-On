@@ -77,6 +77,31 @@ internal sealed class SharedBodyPaintTexture
         return pixels[y * resolution + x];
     }
 
+    public bool CopyPixelsTo(Color32[] destination)
+    {
+        if (destination == null || destination.Length != pixels.Length)
+        {
+            return false;
+        }
+
+        System.Array.Copy(pixels, destination, pixels.Length);
+        return true;
+    }
+
+    public bool RestorePixels(Color32[] source)
+    {
+        if (Texture == null || source == null || source.Length != pixels.Length)
+        {
+            return false;
+        }
+
+        // Keep the CPU backing store authoritative. Restoring only Texture would
+        // make an undone stroke reappear on the next PaintStroke upload.
+        System.Array.Copy(source, pixels, pixels.Length);
+        Upload();
+        return true;
+    }
+
     public void Dispose()
     {
         if (Texture != null)
@@ -158,6 +183,16 @@ public sealed class PaintableBodyPart : MonoBehaviour
     public Color Sample(Vector2 uv)
     {
         return paintData != null ? paintData.Sample(uv) : Color.white;
+    }
+
+    public bool CopyPaintPixelsTo(Color32[] destination)
+    {
+        return paintData != null && paintData.CopyPixelsTo(destination);
+    }
+
+    public bool RestorePaintPixels(Color32[] pixels)
+    {
+        return paintData != null && paintData.RestorePixels(pixels);
     }
 
     public string GetPaintCoverageDiagnostic()

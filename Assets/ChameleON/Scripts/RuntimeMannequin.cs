@@ -39,7 +39,7 @@ public sealed class RuntimeMannequin : MonoBehaviour, IMannequinVisual
 
         visualRoot = new GameObject("White Body").transform;
         visualRoot.SetParent(transform, false);
-        visualRoot.localScale = Vector3.one * 0.71f;
+        visualRoot.localScale = Vector3.one * 0.355f;
 
         Shader shader = Shader.Find("Universal Render Pipeline/Lit");
         if (shader == null)

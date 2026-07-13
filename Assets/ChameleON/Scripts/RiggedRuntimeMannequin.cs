@@ -7,7 +7,7 @@ using UnityEngine.Rendering;
 
 public sealed class RiggedRuntimeMannequin : MonoBehaviour, IMannequinVisual
 {
-    private const float TargetHeight = 1.82f;
+    private const float TargetHeight = 0.91f;
     private const float CrossfadeSeconds = 0.18f;
 
     private readonly List<PaintableBodyPart> paintableParts = new List<PaintableBodyPart>();

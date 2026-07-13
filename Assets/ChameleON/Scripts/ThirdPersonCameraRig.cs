@@ -11,15 +11,15 @@ using UnityEngine.EventSystems;
 public sealed class ThirdPersonCameraRig : MonoBehaviour
 {
     [Header("Framing")]
-    [SerializeField] private Vector3 targetOffset = new Vector3(0f, 1.15f, 0f);
-    [SerializeField] private float shoulderOffset = 0.30f;
+    [SerializeField] private Vector3 targetOffset = new Vector3(0f, 0.575f, 0f);
+    [SerializeField] private float shoulderOffset = 0.15f;
     [SerializeField] private float orbitDistance = 3.5f;
     [SerializeField] private float normalFieldOfView = 58f;
-    [SerializeField] private float focusedShoulderOffset = -0.45f;
-    [SerializeField] private float focusedDistance = 2.9f;
+    [SerializeField] private float focusedShoulderOffset = -0.225f;
+    [SerializeField] private float focusedDistance = 1.45f;
     [SerializeField] private float focusedFieldOfView = 50f;
     [SerializeField] private float attachedShoulderOffset;
-    [SerializeField] private float attachedDistance = 2.6f;
+    [SerializeField] private float attachedDistance = 1.3f;
     [SerializeField] private float attachedFieldOfView = 52f;
 
     [Header("Orbit")]
@@ -34,9 +34,16 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
 
     [Header("Movement Follow (Mobile Assist)")]
     [SerializeField] private bool followMovementHeading = true;
+    [Tooltip("Seconds that manual mouse/touch orbit remains authoritative after release.")]
     [SerializeField] private float movementFollowDelay = 0.60f;
-    [SerializeField] private float movementFollowSpeed = 110f;
-    [SerializeField] private float movementFollowDeadZone = 3.5f;
+    [Tooltip("Maximum yaw correction speed after a movement direction has been committed.")]
+    [SerializeField] private float movementFollowSpeed = 82f;
+    [Tooltip("A turn smaller than this never moves the camera automatically.")]
+    [SerializeField] private float movementFollowActivationAngle = 35f;
+    [Tooltip("The larger turn must be held this long before the camera commits to it.")]
+    [SerializeField] private float movementFollowCommitDelay = 0.30f;
+    [Tooltip("Once committed, stop this many degrees short to avoid tiny correction jitter.")]
+    [SerializeField] private float movementFollowReleaseDeadZone = 8f;
     [SerializeField] private float movementFollowMinimumStrength = 0.15f;
 
     [Header("Collision")]
@@ -64,6 +71,8 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
     private bool mouseDragging;
     private bool mouseDragBlocked;
     private bool movementFollowActive;
+    private bool movementFollowPending;
+    private bool movementFollowCommitted;
     private int orbitTouchId = -1;
 
     private float desiredYaw;
@@ -77,6 +86,9 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
     private float fieldOfViewVelocity;
     private float movementHeadingYaw;
     private float movementStrength;
+    private float pendingMovementFollowTime;
+    private float pendingMovementTurnDirection;
+    private float committedMovementHeadingYaw;
     private float manualOrbitGraceRemaining;
     private Vector3 smoothedTargetPosition;
     private Vector3 targetPositionVelocity;
@@ -87,7 +99,8 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
     public Transform Target => followTarget;
     public float Yaw => desiredYaw;
     public float Pitch => desiredPitch;
-    public bool IsFollowingMovement => movementFollowActive;
+    public bool IsFollowingMovement => movementFollowCommitted;
+    public bool IsMovementFollowPending => movementFollowPending;
     public float MovementHeadingYaw => movementHeadingYaw;
 
     public void SetMovementFollowEnabled(bool isEnabled)
@@ -150,8 +163,13 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
         fieldOfViewVelocity = 0f;
         queuedOrbitDegrees = Vector2.zero;
         movementFollowActive = false;
+        movementFollowPending = false;
+        movementFollowCommitted = false;
         movementHeadingYaw = desiredYaw;
+        committedMovementHeadingYaw = desiredYaw;
         movementStrength = 0f;
+        pendingMovementFollowTime = 0f;
+        pendingMovementTurnDirection = 0f;
         manualOrbitGraceRemaining = 0f;
 
         ApplyCameraPose(0f, true);
@@ -170,6 +188,10 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
     public void SetFocusedMode(bool isFocused)
     {
         focusedMode = isFocused;
+        if (isFocused)
+        {
+            ResetMovementFollowDecision();
+        }
     }
 
     /// <summary>
@@ -195,6 +217,10 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
         movementHeadingYaw = NormalizeSignedAngle(worldYaw);
         movementStrength = Mathf.Clamp01(strength);
         movementFollowActive = followMovementHeading && movementStrength >= movementFollowMinimumStrength;
+        if (!movementFollowActive)
+        {
+            ResetMovementFollowDecision();
+        }
     }
 
     /// <summary>Stops automatic yaw changes until a new movement heading arrives.</summary>
@@ -202,6 +228,7 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
     {
         movementFollowActive = false;
         movementStrength = 0f;
+        ResetMovementFollowDecision();
     }
 
     public void SetTargetOffset(Vector3 worldOffset, bool snapImmediately)
@@ -218,6 +245,7 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
         desiredYaw = yaw;
         desiredPitch = ClampPitch(pitch);
         queuedOrbitDegrees = Vector2.zero;
+        ResetMovementFollowDecision();
         if (snapImmediately)
         {
             currentYaw = desiredYaw;
@@ -236,6 +264,9 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
         {
             queuedOrbitDegrees += orbitDeltaDegrees;
             manualOrbitGraceRemaining = movementFollowDelay;
+            // Manual composition always wins. Discard any pending/committed
+            // automatic turn and evaluate again only after the release grace.
+            ResetMovementFollowDecision();
         }
     }
 
@@ -456,20 +487,90 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
         if (!movementFollowActive || !followMovementHeading || focusedMode || attachedMode ||
             !orbitEnabled || deltaTime <= 0f)
         {
+            ResetMovementFollowDecision();
             return;
         }
 
-        float yawError = Mathf.DeltaAngle(desiredYaw, movementHeadingYaw);
-        float remainingError = Mathf.Abs(yawError) - movementFollowDeadZone;
+        if (movementFollowCommitted)
+        {
+            float committedError = Mathf.DeltaAngle(desiredYaw, committedMovementHeadingYaw);
+            float latestError = Mathf.DeltaAngle(desiredYaw, movementHeadingYaw);
+            float changedHeading = Mathf.Abs(Mathf.DeltaAngle(committedMovementHeadingYaw, movementHeadingYaw));
+            bool reversedTurnDirection = changedHeading > movementFollowReleaseDeadZone &&
+                                         committedError * latestError < 0f;
+
+            if (changedHeading >= movementFollowActivationAngle || reversedTurnDirection)
+            {
+                // A committed turn ignores minor stick wobble, but it must never
+                // keep rotating toward a stale heading after a deliberate turn or
+                // reversal. Cancel it and require the new heading to pass the same
+                // activation angle and hold delay as any other automatic turn.
+                ResetMovementFollowDecision();
+            }
+        }
+
+        if (!movementFollowCommitted)
+        {
+            float activationError = Mathf.DeltaAngle(desiredYaw, movementHeadingYaw);
+            float activationMagnitude = Mathf.Abs(activationError);
+            if (activationMagnitude < movementFollowActivationAngle)
+            {
+                ResetPendingMovementFollow();
+                return;
+            }
+
+            float turnDirection = Mathf.Sign(activationError);
+            if (!movementFollowPending || !Mathf.Approximately(turnDirection, pendingMovementTurnDirection))
+            {
+                movementFollowPending = true;
+                pendingMovementFollowTime = 0f;
+                pendingMovementTurnDirection = turnDirection;
+            }
+
+            pendingMovementFollowTime += deltaTime;
+            if (pendingMovementFollowTime + 0.0001f < movementFollowCommitDelay)
+            {
+                return;
+            }
+
+            // Snapshot the heading. Incoming stick wobble cannot drag an active
+            // camera turn; another deliberate threshold crossing is required.
+            committedMovementHeadingYaw = movementHeadingYaw;
+            movementFollowCommitted = true;
+            ResetPendingMovementFollow();
+        }
+
+        float yawError = Mathf.DeltaAngle(desiredYaw, committedMovementHeadingYaw);
+        float remainingError = Mathf.Abs(yawError) - movementFollowReleaseDeadZone;
         if (remainingError <= 0f)
         {
+            movementFollowCommitted = false;
             return;
         }
 
         float normalizedStrength = Mathf.InverseLerp(movementFollowMinimumStrength, 1f, movementStrength);
         float speedScale = Mathf.Lerp(0.55f, 1f, normalizedStrength);
         float maximumStep = Mathf.Min(remainingError, movementFollowSpeed * speedScale * deltaTime);
-        desiredYaw = Mathf.MoveTowardsAngle(desiredYaw, movementHeadingYaw, maximumStep);
+        desiredYaw = Mathf.MoveTowardsAngle(desiredYaw, committedMovementHeadingYaw, maximumStep);
+
+        if (Mathf.Abs(Mathf.DeltaAngle(desiredYaw, committedMovementHeadingYaw)) <=
+            movementFollowReleaseDeadZone + 0.001f)
+        {
+            movementFollowCommitted = false;
+        }
+    }
+
+    private void ResetMovementFollowDecision()
+    {
+        movementFollowCommitted = false;
+        ResetPendingMovementFollow();
+    }
+
+    private void ResetPendingMovementFollow()
+    {
+        movementFollowPending = false;
+        pendingMovementFollowTime = 0f;
+        pendingMovementTurnDirection = 0f;
     }
 
     private float FindSafeDistance(Vector3 origin, Vector3 direction, float requestedDistance)
@@ -586,7 +687,10 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
         targetSmoothTime = Mathf.Max(0.001f, targetSmoothTime);
         movementFollowDelay = Mathf.Max(0f, movementFollowDelay);
         movementFollowSpeed = Mathf.Max(1f, movementFollowSpeed);
-        movementFollowDeadZone = Mathf.Clamp(movementFollowDeadZone, 0f, 45f);
+        movementFollowActivationAngle = Mathf.Clamp(movementFollowActivationAngle, 5f, 120f);
+        movementFollowCommitDelay = Mathf.Max(0f, movementFollowCommitDelay);
+        movementFollowReleaseDeadZone = Mathf.Clamp(movementFollowReleaseDeadZone, 0f,
+            movementFollowActivationAngle - 1f);
         movementFollowMinimumStrength = Mathf.Clamp01(movementFollowMinimumStrength);
         collisionReleaseSmoothTime = Mathf.Max(0.001f, collisionReleaseSmoothTime);
         normalFieldOfView = Mathf.Clamp(normalFieldOfView, 15f, 100f);
