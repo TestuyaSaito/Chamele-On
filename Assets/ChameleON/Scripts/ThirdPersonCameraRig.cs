@@ -274,17 +274,25 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
         queuedOrbitDegrees = Vector2.zero;
 
         float safeDeltaTime = Mathf.Max(0f, deltaTime);
-        if (manualOrbitGraceRemaining > 0f)
+        // A finger that has claimed the look area (or a held mouse button) owns
+        // the camera until it is released, even when it is momentarily still.
+        // This prevents movement follow from fighting a deliberate two-thumb
+        // camera composition while the player keeps running.
+        bool manualPointerHeld = orbitTouchId >= 0 || (mouseDragging && !mouseDragBlocked);
+        if (!manualPointerHeld)
         {
-            manualOrbitGraceRemaining = Mathf.Max(0f, manualOrbitGraceRemaining - safeDeltaTime);
-            if (manualOrbitGraceRemaining <= 0f)
+            if (manualOrbitGraceRemaining > 0f)
+            {
+                manualOrbitGraceRemaining = Mathf.Max(0f, manualOrbitGraceRemaining - safeDeltaTime);
+                if (manualOrbitGraceRemaining <= 0f)
+                {
+                    FollowMovementHeading(safeDeltaTime);
+                }
+            }
+            else
             {
                 FollowMovementHeading(safeDeltaTime);
             }
-        }
-        else
-        {
-            FollowMovementHeading(safeDeltaTime);
         }
 
         ApplyCameraPose(safeDeltaTime, false);

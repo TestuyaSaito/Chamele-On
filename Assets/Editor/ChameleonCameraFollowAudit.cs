@@ -1,4 +1,5 @@
 using System;
+using System.Reflection;
 using UnityEditor;
 using UnityEngine;
 
@@ -28,9 +29,15 @@ public static class ChameleonCameraFollowAudit
             Require(Mathf.Abs(Mathf.DeltaAngle(rig.Yaw, 90f)) <= 4f,
                 $"Movement follow stopped at {rig.Yaw:F1} degrees instead of settling behind 90 degrees.");
 
+            SetOrbitTouchId(rig, 42);
             rig.AddOrbitInput(new Vector2(-40f, 0f));
             rig.Tick(0.1f);
             float manuallyOrbitedYaw = rig.Yaw;
+            Step(rig, 20, 0.1f);
+            Require(Mathf.Abs(Mathf.DeltaAngle(rig.Yaw, manuallyOrbitedYaw)) < 0.1f,
+                "Automatic follow moved the camera while a look finger was still held.");
+
+            SetOrbitTouchId(rig, -1);
             Step(rig, 5, 0.1f);
             Require(Mathf.Abs(Mathf.DeltaAngle(rig.Yaw, manuallyOrbitedYaw)) < 0.1f,
                 "Automatic follow overrode the manual camera grace period.");
@@ -76,6 +83,14 @@ public static class ChameleonCameraFollowAudit
         {
             rig.Tick(deltaTime);
         }
+    }
+
+    private static void SetOrbitTouchId(ThirdPersonCameraRig rig, int touchId)
+    {
+        FieldInfo field = typeof(ThirdPersonCameraRig).GetField("orbitTouchId",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Require(field != null, "Camera rig orbit touch state could not be inspected.");
+        field.SetValue(rig, touchId);
     }
 
     private static void Require(bool condition, string message)
