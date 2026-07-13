@@ -24,6 +24,19 @@ public static class ChameleonCameraFollowAudit
             rig.SetLegacyPointerInputEnabled(false);
             rig.SetOrbitAngles(0f, 10f, true);
 
+            // The shipping mobile prototype is manual-camera by default:
+            // walking must not rotate the orbit behind the player's back.
+            rig.SetMovementHeading(90f, 1f);
+            Step(rig, 12, 0.1f);
+            Require(Mathf.Abs(Mathf.DeltaAngle(rig.Yaw, 0f)) < 0.1f &&
+                    !rig.IsMovementFollowPending && !rig.IsFollowingMovement,
+                "The default mobile camera followed movement instead of staying manual.");
+
+            // Keep the threshold implementation covered as an opt-in helper;
+            // no shipping code enables it at startup.
+            rig.SetMovementFollowEnabled(true);
+            rig.SetOrbitAngles(0f, 10f, true);
+
             // Small steering corrections must never pull the camera around.
             rig.SetMovementHeading(24f, 1f);
             Step(rig, 15, 0.1f);
@@ -121,8 +134,8 @@ public static class ChameleonCameraFollowAudit
             Require(Mathf.Abs(Mathf.DeltaAngle(rig.Yaw, 0f)) < 0.1f,
                 "Wall-attached mode must not auto-rotate the camera.");
 
-            Debug.Log("CHAMELEON_CAMERA_FOLLOW_AUDIT_PASS: activation threshold, commit delay, " +
-                "committed retarget/reversal, release dead zone, manual override, paint, and attachment checks passed.");
+            Debug.Log("CHAMELEON_CAMERA_FOLLOW_AUDIT_PASS: manual default, optional activation threshold, " +
+                "commit delay, committed retarget/reversal, release dead zone, manual override, paint, and attachment checks passed.");
         }
         finally
         {

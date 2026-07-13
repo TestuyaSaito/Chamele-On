@@ -32,8 +32,9 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
     [SerializeField] private float orbitSmoothTime = 0.055f;
     [SerializeField] private float targetSmoothTime = 0.035f;
 
-    [Header("Movement Follow (Mobile Assist)")]
-    [SerializeField] private bool followMovementHeading = true;
+    [Header("Movement Follow (Optional Assist)")]
+    [Tooltip("Disabled by default to match Meccha Chameleon's manual orbit camera. Enable only if a future mode explicitly wants camera auto-follow.")]
+    [SerializeField] private bool followMovementHeading = false;
     [Tooltip("Seconds that manual mouse/touch orbit remains authoritative after release.")]
     [SerializeField] private float movementFollowDelay = 0.60f;
     [Tooltip("Maximum yaw correction speed after a movement direction has been committed.")]
@@ -209,8 +210,9 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
     }
 
     /// <summary>
-    /// Supplies the character's intended world-space travel heading. When the
-    /// player is not manually orbiting, the camera eases behind this heading.
+    /// Supplies the character's intended world-space travel heading. This is
+    /// ignored while the optional movement-follow assist is disabled (the
+    /// shipping mobile mode); it remains available for a future alternate mode.
     /// </summary>
     public void SetMovementHeading(float worldYaw, float strength)
     {

@@ -5,6 +5,10 @@ using UnityEngine.Rendering;
 public sealed class RuntimeMannequin : MonoBehaviour, IMannequinVisual
 {
     public const int PaintLayer = 8;
+    // The phone prototype deliberately uses a tiny cube mannequin.  A resource
+    // character can still be added later, but importing a rigged asset here
+    // makes the first playable build slower and breaks the simple voxel look.
+    private static readonly bool UseRiggedResource = false;
 
     private sealed class BodyPiece
     {
@@ -27,15 +31,18 @@ public sealed class RuntimeMannequin : MonoBehaviour, IMannequinVisual
 
     public void Build()
     {
-        rigged = gameObject.AddComponent<RiggedRuntimeMannequin>();
-        rigged.Build();
-        if (rigged.IsBuilt)
+        if (UseRiggedResource)
         {
-            return;
-        }
+            rigged = gameObject.AddComponent<RiggedRuntimeMannequin>();
+            rigged.Build();
+            if (rigged.IsBuilt)
+            {
+                return;
+            }
 
-        Destroy(rigged);
-        rigged = null;
+            Destroy(rigged);
+            rigged = null;
+        }
 
         visualRoot = new GameObject("White Body").transform;
         visualRoot.SetParent(transform, false);
@@ -63,19 +70,22 @@ public sealed class RuntimeMannequin : MonoBehaviour, IMannequinVisual
         if (paintTemplate.HasProperty("_Smoothness")) paintTemplate.SetFloat("_Smoothness", 0.24f);
         if (paintTemplate.HasProperty("_Glossiness")) paintTemplate.SetFloat("_Glossiness", 0.24f);
 
-        CreatePart("Pelvis", PrimitiveType.Sphere, new Vector3(0f, 0.98f, 0f), new Vector3(0.56f, 0.50f, 0.36f), Vector3.zero);
-        CreatePart("Torso", PrimitiveType.Capsule, new Vector3(0f, 1.63f, 0f), new Vector3(0.49f, 0.50f, 0.31f), Vector3.zero);
-        CreatePart("Head", PrimitiveType.Sphere, new Vector3(0f, 2.43f, 0f), new Vector3(0.48f, 0.50f, 0.46f), Vector3.zero);
+        // Unity's cube primitive is intentionally used for every piece.  With
+        // the root scale of 0.355 this is a roughly 0.95 m tall, Minecraft-like
+        // silhouette that stays readable when painted on a phone screen.
+        CreatePart("Pelvis", PrimitiveType.Cube, new Vector3(0f, 0.98f, 0f), new Vector3(0.56f, 0.50f, 0.36f), Vector3.zero);
+        CreatePart("Torso", PrimitiveType.Cube, new Vector3(0f, 1.63f, 0f), new Vector3(0.49f, 0.82f, 0.31f), Vector3.zero);
+        CreatePart("Head", PrimitiveType.Cube, new Vector3(0f, 2.43f, 0f), new Vector3(0.56f, 0.58f, 0.52f), Vector3.zero);
 
-        CreatePart("ArmL", PrimitiveType.Capsule, new Vector3(-0.63f, 1.57f, 0f), new Vector3(0.17f, 0.52f, 0.17f), Vector3.zero);
-        CreatePart("ArmR", PrimitiveType.Capsule, new Vector3(0.63f, 1.57f, 0f), new Vector3(0.17f, 0.52f, 0.17f), Vector3.zero);
-        CreatePart("HandL", PrimitiveType.Sphere, new Vector3(-0.63f, 0.97f, 0f), Vector3.one * 0.22f, Vector3.zero);
-        CreatePart("HandR", PrimitiveType.Sphere, new Vector3(0.63f, 0.97f, 0f), Vector3.one * 0.22f, Vector3.zero);
+        CreatePart("ArmL", PrimitiveType.Cube, new Vector3(-0.63f, 1.57f, 0f), new Vector3(0.17f, 0.82f, 0.17f), Vector3.zero);
+        CreatePart("ArmR", PrimitiveType.Cube, new Vector3(0.63f, 1.57f, 0f), new Vector3(0.17f, 0.82f, 0.17f), Vector3.zero);
+        CreatePart("HandL", PrimitiveType.Cube, new Vector3(-0.63f, 0.97f, 0f), Vector3.one * 0.22f, Vector3.zero);
+        CreatePart("HandR", PrimitiveType.Cube, new Vector3(0.63f, 0.97f, 0f), Vector3.one * 0.22f, Vector3.zero);
 
-        CreatePart("LegL", PrimitiveType.Capsule, new Vector3(-0.25f, 0.43f, 0f), new Vector3(0.20f, 0.48f, 0.21f), Vector3.zero);
-        CreatePart("LegR", PrimitiveType.Capsule, new Vector3(0.25f, 0.43f, 0f), new Vector3(0.20f, 0.48f, 0.21f), Vector3.zero);
-        CreatePart("FootL", PrimitiveType.Sphere, new Vector3(-0.25f, 0.08f, 0.18f), new Vector3(0.23f, 0.16f, 0.39f), Vector3.zero);
-        CreatePart("FootR", PrimitiveType.Sphere, new Vector3(0.25f, 0.08f, 0.18f), new Vector3(0.23f, 0.16f, 0.39f), Vector3.zero);
+        CreatePart("LegL", PrimitiveType.Cube, new Vector3(-0.25f, 0.43f, 0f), new Vector3(0.20f, 0.72f, 0.21f), Vector3.zero);
+        CreatePart("LegR", PrimitiveType.Cube, new Vector3(0.25f, 0.43f, 0f), new Vector3(0.20f, 0.72f, 0.21f), Vector3.zero);
+        CreatePart("FootL", PrimitiveType.Cube, new Vector3(-0.25f, 0.10f, 0.18f), new Vector3(0.23f, 0.20f, 0.39f), Vector3.zero);
+        CreatePart("FootR", PrimitiveType.Cube, new Vector3(0.25f, 0.10f, 0.18f), new Vector3(0.23f, 0.20f, 0.39f), Vector3.zero);
 
         ApplyPose(0);
     }

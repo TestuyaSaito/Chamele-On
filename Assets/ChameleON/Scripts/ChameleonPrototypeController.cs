@@ -187,12 +187,14 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
         gameCamera.gameObject.tag = "MainCamera";
 
         gameCamera.orthographic = false;
+        gameCamera.clearFlags = CameraClearFlags.SolidColor;
+        gameCamera.backgroundColor = new Color(0.42f, 0.70f, 0.90f);
         gameCamera.fieldOfView = 55f;
-        if (!IsAuthoredUrpScene())
-        {
-            gameCamera.nearClipPlane = 0.08f;
-            gameCamera.farClipPlane = 100f;
-        }
+        // The prototype always owns its lightweight block map.  The previous
+        // Garden scene used a much larger near/far range and a baked lighting
+        // setup; those values make the small mobile map look washed out.
+        gameCamera.nearClipPlane = 0.08f;
+        gameCamera.farClipPlane = 100f;
         gameCamera.allowHDR = true;
 
         UniversalAdditionalCameraData cameraData = gameCamera.GetComponent<UniversalAdditionalCameraData>();
@@ -218,66 +220,129 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
 #endif
         }
 
-        if (!IsAuthoredUrpScene())
-        {
-            RenderSettings.ambientMode = AmbientMode.Trilight;
-            RenderSettings.ambientSkyColor = new Color(0.56f, 0.62f, 0.70f);
-            RenderSettings.ambientEquatorColor = new Color(0.27f, 0.29f, 0.31f);
-            RenderSettings.ambientGroundColor = new Color(0.12f, 0.10f, 0.09f);
-            RenderSettings.ambientIntensity = 0.85f;
-            RenderSettings.reflectionIntensity = 0.65f;
-        }
+        RenderSettings.ambientMode = AmbientMode.Trilight;
+        RenderSettings.ambientSkyColor = new Color(0.48f, 0.70f, 0.86f);
+        RenderSettings.ambientEquatorColor = new Color(0.29f, 0.42f, 0.30f);
+        RenderSettings.ambientGroundColor = new Color(0.10f, 0.15f, 0.09f);
+        RenderSettings.ambientIntensity = 0.82f;
+        RenderSettings.reflectionIntensity = 0.45f;
+        RenderSettings.skybox = null;
     }
 
     private void CreateMaterials()
     {
-        floorMaterial = MakeMaterial("Checkered Floor Base", new Color(0.58f, 0.52f, 0.43f), 0f, 0.18f);
-        wallMaterial = MakeMaterial("Wallpaper Green", new Color(0.16f, 0.33f, 0.22f), 0f, 0.20f);
-        accentMaterial = MakeMaterial("Wallpaper Pattern", new Color(0.43f, 0.63f, 0.31f), 0f, 0.18f);
-        darkMaterial = MakeMaterial("Dark Wood", new Color(0.14f, 0.075f, 0.045f), 0f, 0.40f);
-        pictureMaterialA = MakeMaterial("Painting Blue", new Color(0.13f, 0.34f, 0.52f), 0f, 0.30f);
-        pictureMaterialB = MakeMaterial("Painting Gold", new Color(0.78f, 0.49f, 0.12f), 0.12f, 0.62f);
+        // Flat, saturated materials keep the scene readable on a phone and
+        // give the map a friendly voxel/toy-game silhouette.
+        floorMaterial = MakeMaterial("Voxel Grass", new Color(0.28f, 0.62f, 0.25f), 0f, 0.08f);
+        wallMaterial = MakeMaterial("Voxel Dirt", new Color(0.48f, 0.28f, 0.15f), 0f, 0.10f);
+        accentMaterial = MakeMaterial("Voxel Leaves", new Color(0.12f, 0.48f, 0.18f), 0f, 0.08f);
+        darkMaterial = MakeMaterial("Voxel Wood", new Color(0.30f, 0.16f, 0.075f), 0f, 0.12f);
+        pictureMaterialA = MakeMaterial("Voxel Water", new Color(0.12f, 0.48f, 0.82f), 0f, 0.20f);
+        pictureMaterialB = MakeMaterial("Voxel Gold", new Color(0.95f, 0.69f, 0.12f), 0f, 0.14f);
     }
 
     private void BuildRoom()
     {
-        GameObject importedMap = GameObject.Find("Classic Sponza Environment");
-        if (importedMap == null)
-        {
-            importedMap = GameObject.Find("Sponza_Modular");
-        }
-        if (importedMap != null)
-        {
-            authoredEnvironment = true;
-            environmentRoot = importedMap.transform;
-            return;
-        }
-
-        if (IsAuthoredUrpScene())
-        {
-            authoredEnvironment = true;
-            GameObject authoredRoot = GameObject.Find("ExteriorProps") ?? GameObject.Find("Lighting") ?? GameObject.Find("Spawn");
-            environmentRoot = authoredRoot != null ? authoredRoot.transform : transform;
-            Debug.Log("CHAMELEON_AUTHORED_ENVIRONMENT_READY: " + SceneManager.GetActiveScene().name);
-            return;
-        }
-
+        // Do not render the imported Garden/Sponza scene in the mobile build.
+        // It is useful as an art reference, but it is far too heavy and visually
+        // detailed for this short, blocky prototype.
+        DisableImportedSceneRoots();
         CreateMaterials();
-
-        environmentRoot = new GameObject("3D Hide-and-Seek Room").transform;
-
-        CreateBlock("Floor", new Vector3(0f, -0.12f, 0f), new Vector3(14f, 0.24f, 12f), floorMaterial);
-        CreateBlock("Back Wall", new Vector3(0f, 2.4f, 6f), new Vector3(14f, 4.8f, 0.24f), wallMaterial);
-        CreateBlock("Left Wall", new Vector3(-7f, 2.4f, 0f), new Vector3(0.24f, 4.8f, 12f), wallMaterial);
-        CreateBlock("Right Wall", new Vector3(7f, 2.4f, 0f), new Vector3(0.24f, 4.8f, 12f), wallMaterial);
-        CreateBlock("Ceiling Trim", new Vector3(0f, 4.45f, 5.78f), new Vector3(14f, 0.28f, 0.18f), darkMaterial);
-        CreateBlock("Wall Trim", new Vector3(0f, 1.05f, 5.78f), new Vector3(14f, 0.28f, 0.18f), darkMaterial);
-
-        CreateCheckeredFloor();
-        CreateWallpaperPattern();
-        CreatePictureWall();
-        CreateFurnitureLayout();
+        environmentRoot = new GameObject("Voxel Hide-and-Seek Map").transform;
+        authoredEnvironment = true;
+        BuildBlockyMap();
         CreateLighting();
+    }
+
+    private void DisableImportedSceneRoots()
+    {
+        Scene activeScene = SceneManager.GetActiveScene();
+        GameObject[] roots = activeScene.GetRootGameObjects();
+        for (int i = 0; i < roots.Length; i++)
+        {
+            GameObject root = roots[i];
+            if (root == null || root == gameObject || root == gameCamera.gameObject ||
+                root.GetComponentInChildren<EventSystem>(true) != null ||
+                gameObject.transform.IsChildOf(root.transform) ||
+                gameCamera.transform.IsChildOf(root.transform))
+            {
+                continue;
+            }
+
+            // Disable rather than destroy so the authored Garden scene remains
+            // available as a reference when the project is opened in the editor.
+            root.SetActive(false);
+        }
+    }
+
+    private void BuildBlockyMap()
+    {
+        Material grassAlt = MakeMaterial("Voxel Grass Light", new Color(0.38f, 0.72f, 0.28f), 0f, 0.08f);
+        Material stone = MakeMaterial("Voxel Stone", new Color(0.42f, 0.48f, 0.52f), 0f, 0.12f);
+        Material roof = MakeMaterial("Voxel Roof", new Color(0.72f, 0.18f, 0.16f), 0f, 0.11f);
+        Material flower = MakeMaterial("Voxel Flower", new Color(0.95f, 0.30f, 0.48f), 0f, 0.08f);
+
+        // 8×8 two-metre tiles give the player a clear, inexpensive play space.
+        for (int x = -4; x < 4; x++)
+        {
+            for (int z = -4; z < 4; z++)
+            {
+                Material tile = ((x + z) & 1) == 0 ? floorMaterial : grassAlt;
+                CreateBlock("Grass Block", new Vector3(x * 2f + 1f, -0.12f, z * 2f + 1f),
+                    new Vector3(2f, 0.24f, 2f), tile);
+            }
+        }
+
+        // Low boundary walls keep the camera from seeing an empty horizon while
+        // leaving the map open enough for a small child-friendly playground.
+        CreateBlock("Back Boundary", new Vector3(0f, 1.1f, 8.1f), new Vector3(16.4f, 2.2f, 0.4f), stone);
+        CreateBlock("Left Boundary", new Vector3(-8.1f, 1.1f, 0f), new Vector3(0.4f, 2.2f, 16.4f), stone);
+        CreateBlock("Right Boundary", new Vector3(8.1f, 1.1f, 0f), new Vector3(0.4f, 2.2f, 16.4f), stone);
+        CreateBlock("Boundary Cap", new Vector3(0f, 2.28f, 8.1f), new Vector3(16.4f, 0.16f, 0.52f), accentMaterial);
+
+        // A tiny block house creates a recognizable hiding landmark.
+        CreateBlock("House Floor", new Vector3(-3.8f, 0.10f, 2.8f), new Vector3(4.2f, 0.20f, 3.2f), darkMaterial);
+        CreateBlock("House Wall Left", new Vector3(-5.6f, 1.15f, 2.8f), new Vector3(0.35f, 2.1f, 3.2f), wallMaterial);
+        CreateBlock("House Wall Back", new Vector3(-3.8f, 1.15f, 4.2f), new Vector3(3.3f, 2.1f, 0.35f), wallMaterial);
+        CreateBlock("House Pillar", new Vector3(-2.1f, 1.15f, 1.45f), new Vector3(0.35f, 2.1f, 0.35f), darkMaterial);
+        CreateBlock("House Roof", new Vector3(-3.8f, 2.42f, 2.8f), new Vector3(4.7f, 0.35f, 3.7f), roof);
+
+        // Simple cover pieces double as paint targets and wall-attachment tests.
+        CreateBlock("Paint Wall", new Vector3(1.8f, 0.90f, 1.15f), new Vector3(3.2f, 1.8f, 0.32f), wallMaterial);
+        CreateBlock("Paint Wall Cap", new Vector3(1.8f, 1.88f, 1.15f), new Vector3(3.35f, 0.16f, 0.40f), accentMaterial);
+        CreateBlock("Blue Pond", new Vector3(-4.5f, 0.025f, -3.5f), new Vector3(3.5f, 0.05f, 2.2f), pictureMaterialA,
+            Vector3.zero, false);
+
+        CreateVoxelTree(new Vector3(5.2f, 0f, 4.7f), darkMaterial, accentMaterial);
+        CreateVoxelTree(new Vector3(-6.0f, 0f, -1.2f), darkMaterial, accentMaterial);
+
+        // A handful of crates and flowers add scale without importing furniture
+        // meshes or generating thousands of polygons.
+        for (int i = 0; i < 4; i++)
+        {
+            float x = 3.4f + (i % 2) * 0.72f;
+            float z = -3.8f + (i / 2) * 0.72f;
+            CreateBlock("Crate", new Vector3(x, 0.34f, z), new Vector3(0.62f, 0.68f, 0.62f), darkMaterial,
+                new Vector3(0f, i * 9f, 0f));
+        }
+
+        for (int i = 0; i < 5; i++)
+        {
+            float x = -1.0f + i * 0.54f;
+            CreateBlock("Flower Block", new Vector3(x, 0.18f, -1.35f), new Vector3(0.28f, 0.36f, 0.28f), flower);
+        }
+
+        GameObject spawn = new GameObject("PlayerSpawn");
+        spawn.transform.SetParent(environmentRoot, false);
+        spawn.transform.position = new Vector3(0f, 0.02f, -5.4f);
+        spawn.transform.rotation = Quaternion.identity;
+    }
+
+    private void CreateVoxelTree(Vector3 basePosition, Material trunk, Material leaves)
+    {
+        CreateBlock("Tree Trunk", basePosition + new Vector3(0f, 1.15f, 0f), new Vector3(0.75f, 2.3f, 0.75f), trunk);
+        CreateBlock("Tree Leaves Lower", basePosition + new Vector3(0f, 2.25f, 0f), new Vector3(2.6f, 1.0f, 2.6f), leaves);
+        CreateBlock("Tree Leaves Upper", basePosition + new Vector3(0f, 3.25f, 0f), new Vector3(1.85f, 1.0f, 1.85f), leaves);
     }
 
     private static bool IsAuthoredUrpScene()
@@ -369,18 +434,18 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
 
     private void CreateLighting()
     {
-        var sunObject = new GameObject("Warm Directional Light", typeof(Light));
+        var sunObject = new GameObject("Voxel Sun", typeof(Light));
         sunObject.transform.SetParent(environmentRoot, false);
-        sunObject.transform.rotation = Quaternion.Euler(48f, -28f, 0f);
+        sunObject.transform.rotation = Quaternion.Euler(48f, -32f, 0f);
         Light sun = sunObject.GetComponent<Light>();
         sun.type = LightType.Directional;
-        sun.color = new Color(1f, 0.90f, 0.75f);
-        sun.intensity = 1.15f;
+        sun.color = new Color(1f, 0.94f, 0.82f);
+        sun.intensity = 1.0f;
         sun.shadows = LightShadows.Soft;
-        sun.shadowStrength = 0.72f;
+        sun.shadowStrength = 0.58f;
 
-        CreatePointLight("Window Fill", new Vector3(-4.8f, 3.5f, -1.0f), new Color(0.55f, 0.75f, 1f), 5.5f, 9f);
-        CreatePointLight("Lamp Glow", new Vector3(4.0f, 3.2f, 3.8f), new Color(1f, 0.60f, 0.28f), 4.2f, 8f);
+        CreatePointLight("Sky Fill", new Vector3(-3.5f, 4.0f, -2.5f), new Color(0.45f, 0.75f, 1f), 2.4f, 12f);
+        CreatePointLight("House Glow", new Vector3(-3.8f, 2.0f, 2.8f), new Color(1f, 0.58f, 0.25f), 1.7f, 6f);
     }
 
     private void BuildPlayer()
@@ -410,6 +475,10 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
         PreparePaintUndoBuffers();
 
         cameraRig.Initialize(gameCamera, playerRoot);
+        // Meccha Chameleon keeps the orbit camera under the player's manual
+        // control.  Movement changes the character heading, not the camera
+        // heading; a right-side swipe/mouse drag is the only yaw input.
+        cameraRig.SetMovementFollowEnabled(false);
         cameraRig.SetOrbitAngles(playerRoot.eulerAngles.y, 10f, true);
     }
 
@@ -2093,7 +2162,7 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
 
         if (!found)
         {
-            Debug.LogError("CHAMELEON_SMOKE_ATTACH_FAIL: no vertical Sponza surface was found near PlayerSpawn.");
+            Debug.LogError("CHAMELEON_SMOKE_ATTACH_FAIL: no vertical block-map surface was found near PlayerSpawn.");
             return false;
         }
 
