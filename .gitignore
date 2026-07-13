@@ -1,0 +1,56 @@
+# Unity-generated folders (recreated on each computer)
+/[Ll]ibrary/
+/[Tt]emp/
+/[Oo]bj/
+/[Ll]ogs/
+/[Uu]ser[Ss]ettings/
+/[Mm]emoryCaptures/
+/[Rr]ecordings/
+
+# Local and player builds
+/[Bb]uild/
+/[Bb]uilds/
+/*.app
+/*.ipa
+/*.xcarchive
+
+# Local logs and crash reports
+/*.log
+/sysinfo.txt
+/crashlytics-build.properties
+
+# IDE-generated files
+/.vs/
+/.vscode/
+/.idea/
+*.csproj
+*.sln
+*.suo
+*.tmp
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+
+# Operating-system files
+.DS_Store
+Thumbs.db
+
+# Apple signing credentials must never be committed
+*.p12
+*.p8
+*.pem
+*.key
+*.cer
+*.mobileprovision
+AuthKey_*.p8
+
+# Local environment secrets
+.env
+.env.*
+!.env.example
