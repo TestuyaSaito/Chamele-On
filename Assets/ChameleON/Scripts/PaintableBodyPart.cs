@@ -158,6 +158,8 @@ internal sealed class SharedBodyPaintTexture
 
 public sealed class PaintableBodyPart : MonoBehaviour
 {
+    private const float CharacterShadowLift = 0.10f;
+
     private SharedBodyPaintTexture paintData;
     private Material[] runtimeMaterials;
     private Renderer paintRenderer;
@@ -313,6 +315,10 @@ public sealed class PaintableBodyPart : MonoBehaviour
             return;
         }
 
+        // Keep the painted character readable in the darker side of the map,
+        // while leaving its cast shadow and the environment lighting intact.
+        targetRenderer.receiveShadows = false;
+
         int slotCount = Mathf.Max(1, targetRenderer.sharedMaterials.Length);
         runtimeMaterials = new Material[slotCount];
         for (int i = 0; i < slotCount; i++)
@@ -339,6 +345,8 @@ public sealed class PaintableBodyPart : MonoBehaviour
                 material.SetColor("_Color", Color.white);
             }
 
+            ApplyCharacterShadowLift(material);
+
             runtimeMaterials[i] = material;
         }
 
@@ -353,12 +361,52 @@ public sealed class PaintableBodyPart : MonoBehaviour
         paintProperties.SetTexture("_MainTex", paintData.Texture);
         paintProperties.SetColor("_BaseColor", Color.white);
         paintProperties.SetColor("_Color", Color.white);
+        paintProperties.SetTexture("_EmissionMap", paintData.Texture);
+        paintProperties.SetColor("_EmissionColor", new Color(CharacterShadowLift,
+            CharacterShadowLift, CharacterShadowLift, 1f));
         targetRenderer.SetPropertyBlock(paintProperties);
 
         Debug.Log("CHAMELEON_PAINT_BINDING_READY: renderer=" + targetRenderer.name +
                   ", slots=" + runtimeMaterials.Length +
                   ", shader=" + runtimeMaterials[0].shader.name +
                   ", replacedPropertyBlock=" + replacedPropertyBlock + ".");
+    }
+
+    private static void ApplyCharacterShadowLift(Material material)
+    {
+        if (material == null)
+        {
+            return;
+        }
+
+        if (material.HasProperty("_ReceiveShadows"))
+        {
+            material.SetFloat("_ReceiveShadows", 0f);
+        }
+
+        if (material.HasProperty("_EmissionMap"))
+        {
+            Texture paintTexture = null;
+            if (material.HasProperty("_BaseMap"))
+            {
+                paintTexture = material.GetTexture("_BaseMap");
+            }
+            else if (material.HasProperty("_MainTex"))
+            {
+                paintTexture = material.GetTexture("_MainTex");
+            }
+
+            if (paintTexture != null)
+            {
+                material.SetTexture("_EmissionMap", paintTexture);
+                if (material.HasProperty("_EmissionColor"))
+                {
+                    material.SetColor("_EmissionColor", new Color(CharacterShadowLift,
+                        CharacterShadowLift, CharacterShadowLift, 1f));
+                    material.EnableKeyword("_EMISSION");
+                }
+            }
+        }
     }
 
     private void OnDestroy()

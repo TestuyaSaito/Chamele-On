@@ -1,0 +1,6 @@
+Asset: Free Pack - Stick Man (Rigged)
+Creator: PolyOne Studio (@polyone)
+Source: https://sketchfab.com/3d-models/free-pack-stick-man-rigged-29e53f85cf1641c7a602af7fc02356b2
+License: Creative Commons Attribution 4.0 International (CC BY 4.0)
+License URL: https://creativecommons.org/licenses/by/4.0/
+Changes: Imported into the Unity project for evaluation. No geometry changes yet.

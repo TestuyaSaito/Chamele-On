@@ -9,6 +9,12 @@ public sealed class RiggedRuntimeMannequin : MonoBehaviour, IMannequinVisual
 {
     private const float TargetHeight = 0.91f;
     private const float CrossfadeSeconds = 0.18f;
+    private static readonly string[] CharacterResourcePaths =
+    {
+        "Characters/PolyOneStickMan/Free Pack - Stick Man",
+        "Characters/UAL1_Standard",
+        "Characters/UAL2_Standard"
+    };
 
     private readonly List<PaintableBodyPart> paintableParts = new List<PaintableBodyPart>();
     private readonly List<SkinnedMeshRenderer> skinnedRenderers = new List<SkinnedMeshRenderer>();
@@ -22,6 +28,29 @@ public sealed class RiggedRuntimeMannequin : MonoBehaviour, IMannequinVisual
     private Material paintTemplate;
     private SharedBodyPaintTexture sharedPaint;
     private Animator animator;
+    private string activeResourcePath;
+    private Transform proceduralLeftArm;
+    private Transform proceduralRightArm;
+    private Transform proceduralLeftForeArm;
+    private Transform proceduralRightForeArm;
+    private Transform proceduralLeftUpLeg;
+    private Transform proceduralRightUpLeg;
+    private Transform proceduralLeftLeg;
+    private Transform proceduralRightLeg;
+    private Transform proceduralLeftFoot;
+    private Transform proceduralRightFoot;
+    private Quaternion proceduralLeftArmRest;
+    private Quaternion proceduralRightArmRest;
+    private Quaternion proceduralLeftForeArmRest;
+    private Quaternion proceduralRightForeArmRest;
+    private Quaternion proceduralLeftUpLegRest;
+    private Quaternion proceduralRightUpLegRest;
+    private Quaternion proceduralLeftLegRest;
+    private Quaternion proceduralRightLegRest;
+    private Quaternion proceduralLeftFootRest;
+    private Quaternion proceduralRightFootRest;
+    private float proceduralWalkTime;
+    private bool proceduralMotionReady;
 
     private PlayableGraph animationGraph;
     private AnimationMixerPlayable animationMixer;
@@ -46,12 +75,7 @@ public sealed class RiggedRuntimeMannequin : MonoBehaviour, IMannequinVisual
             return;
         }
 
-        GameObject source = Resources.Load<GameObject>("Characters/UAL1_Standard");
-        if (source == null)
-        {
-            source = Resources.Load<GameObject>("Characters/UAL2_Standard");
-        }
-
+        GameObject source = LoadCharacterResource();
         if (source == null)
         {
             Debug.LogWarning("Rigged mannequin assets were not imported; using procedural fallback.");
@@ -74,6 +98,7 @@ public sealed class RiggedRuntimeMannequin : MonoBehaviour, IMannequinVisual
         }
 
         NormalizeModelScaleAndOrigin();
+        CollectProceduralMotionBones();
         CreatePaintMaterialsAndColliders();
         CollectAnimationClips();
         ConfigureAnimation();
@@ -91,6 +116,26 @@ public sealed class RiggedRuntimeMannequin : MonoBehaviour, IMannequinVisual
         RefreshPaintColliders();
         Debug.Log("CHAMELEON_RIGGED_BODY_READY: " + skinnedRenderers.Count +
                   " skinned mesh(es), " + clips.Count + " animation clip(s).");
+    }
+
+    private GameObject LoadCharacterResource()
+    {
+        activeResourcePath = null;
+        for (int i = 0; i < CharacterResourcePaths.Length; i++)
+        {
+            string path = CharacterResourcePaths[i];
+            GameObject source = Resources.Load<GameObject>(path);
+            if (source == null)
+            {
+                continue;
+            }
+
+            activeResourcePath = path;
+            Debug.Log("CHAMELEON_RIGGED_RESOURCE: " + path);
+            return source;
+        }
+
+        return null;
     }
 
     public void ApplyPose(int index)
@@ -170,6 +215,11 @@ public sealed class RiggedRuntimeMannequin : MonoBehaviour, IMannequinVisual
     {
         locomotion = Mathf.Clamp01(normalizedSpeed);
         if (!IsBuilt || PoseIndex != 0)
+        {
+            return;
+        }
+
+        if (clips.Count == 0)
         {
             return;
         }
@@ -305,16 +355,22 @@ public sealed class RiggedRuntimeMannequin : MonoBehaviour, IMannequinVisual
         }
 
         Vector2[] secondaryUv = source.uv2;
-        if (!HasUsableUv(secondaryUv) || secondaryUv.Length != source.vertexCount)
+        Vector2[] paintUv;
+        string uvSource;
+        int collapsedUvCount = 0;
+        if (HasUsableUv(secondaryUv) && secondaryUv.Length == source.vertexCount)
         {
-            Debug.LogWarning("No usable body-paint UV channel was found on " + renderer.name + ".");
-            return;
+            collapsedUvCount = CountCollapsedUvs(secondaryUv);
+            paintUv = collapsedUvCount > secondaryUv.Length / 20
+                ? BuildCylindricalPaintUv(source)
+                : secondaryUv;
+            uvSource = ReferenceEquals(paintUv, secondaryUv) ? "copied UV2" : "generated complete cylindrical UVs";
         }
-
-        int collapsedUvCount = CountCollapsedUvs(secondaryUv);
-        Vector2[] paintUv = collapsedUvCount > secondaryUv.Length / 20
-            ? BuildCylindricalPaintUv(source)
-            : secondaryUv;
+        else
+        {
+            paintUv = BuildCylindricalPaintUv(source);
+            uvSource = "generated fallback cylindrical UVs";
+        }
 
         Mesh runtimeMesh = RebuildMeshWithPaintUv(source, paintUv);
         runtimeMesh.UploadMeshData(false);
@@ -324,9 +380,9 @@ public sealed class RiggedRuntimeMannequin : MonoBehaviour, IMannequinVisual
         renderer.enabled = true;
         runtimeSkinnedMeshes.Add(runtimeMesh);
         Debug.Log("CHAMELEON_PAINT_UV_READY: " +
-                  (ReferenceEquals(paintUv, secondaryUv) ? "copied UV2" : "generated complete cylindrical UVs") +
+                  uvSource +
                   " into UV0 for " + renderer.name + "; collapsedSourceUvs=" + collapsedUvCount + "/" +
-                  secondaryUv.Length + "; " +
+                  (secondaryUv != null ? secondaryUv.Length : 0) + "; " +
                   DescribeUv(runtimeMesh));
     }
 
@@ -415,6 +471,7 @@ public sealed class RiggedRuntimeMannequin : MonoBehaviour, IMannequinVisual
 
         CopyBlendShapes(source, mesh);
         mesh.bounds = source.bounds;
+        mesh.RecalculateBounds();
         return mesh;
     }
 
@@ -495,8 +552,10 @@ public sealed class RiggedRuntimeMannequin : MonoBehaviour, IMannequinVisual
     private void CollectAnimationClips()
     {
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        AddClips(Resources.LoadAll<AnimationClip>("Characters/UAL1_Standard"), names);
-        AddClips(Resources.LoadAll<AnimationClip>("Characters/UAL2_Standard"), names);
+        if (!string.IsNullOrEmpty(activeResourcePath))
+        {
+            AddClips(Resources.LoadAll<AnimationClip>(activeResourcePath), names);
+        }
     }
 
     private void AddClips(AnimationClip[] sourceClips, HashSet<string> names)
@@ -663,9 +722,117 @@ public sealed class RiggedRuntimeMannequin : MonoBehaviour, IMannequinVisual
 
     private void LateUpdate()
     {
-        if (IsBuilt && (Time.frameCount & 1) == 0)
+        if (!IsBuilt)
+        {
+            return;
+        }
+
+        ApplyProceduralMotion();
+
+        if ((Time.frameCount & 1) == 0)
         {
             RefreshPaintColliders();
+        }
+    }
+
+    private void CollectProceduralMotionBones()
+    {
+        proceduralLeftArm = FindBone("LeftArm");
+        proceduralRightArm = FindBone("RightArm");
+        proceduralLeftForeArm = FindBone("LeftForeArm");
+        proceduralRightForeArm = FindBone("RightForeArm");
+        proceduralLeftUpLeg = FindBone("LeftUpLeg");
+        proceduralRightUpLeg = FindBone("RightUpLeg");
+        proceduralLeftLeg = FindBone("LeftLeg");
+        proceduralRightLeg = FindBone("RightLeg");
+        proceduralLeftFoot = FindBone("LeftFoot");
+        proceduralRightFoot = FindBone("RightFoot");
+
+        proceduralMotionReady = proceduralLeftArm != null && proceduralRightArm != null &&
+                                proceduralLeftUpLeg != null && proceduralRightUpLeg != null;
+        if (!proceduralMotionReady)
+        {
+            return;
+        }
+
+        proceduralLeftArmRest = proceduralLeftArm.localRotation;
+        proceduralRightArmRest = proceduralRightArm.localRotation;
+        proceduralLeftForeArmRest = proceduralLeftForeArm != null ? proceduralLeftForeArm.localRotation : Quaternion.identity;
+        proceduralRightForeArmRest = proceduralRightForeArm != null ? proceduralRightForeArm.localRotation : Quaternion.identity;
+        proceduralLeftUpLegRest = proceduralLeftUpLeg.localRotation;
+        proceduralRightUpLegRest = proceduralRightUpLeg.localRotation;
+        proceduralLeftLegRest = proceduralLeftLeg != null ? proceduralLeftLeg.localRotation : Quaternion.identity;
+        proceduralRightLegRest = proceduralRightLeg != null ? proceduralRightLeg.localRotation : Quaternion.identity;
+        proceduralLeftFootRest = proceduralLeftFoot != null ? proceduralLeftFoot.localRotation : Quaternion.identity;
+        proceduralRightFootRest = proceduralRightFoot != null ? proceduralRightFoot.localRotation : Quaternion.identity;
+        Debug.Log("CHAMELEON_PROCEDURAL_WALK_READY: stick-man bones were found.");
+    }
+
+    private Transform FindBone(string boneName)
+    {
+        if (visualInstance == null)
+        {
+            return null;
+        }
+
+        string wanted = Normalize(boneName);
+        Transform[] transforms = visualInstance.GetComponentsInChildren<Transform>(true);
+        for (int i = 0; i < transforms.Length; i++)
+        {
+            Transform candidate = transforms[i];
+            if (candidate != null && Normalize(candidate.name) == wanted)
+            {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    private void ApplyProceduralMotion()
+    {
+        if (!proceduralMotionReady || clips.Count > 0)
+        {
+            return;
+        }
+
+        float speed = PoseIndex == 0 ? locomotion : 0f;
+        proceduralWalkTime += Time.deltaTime * Mathf.Lerp(5.2f, 8.8f, speed);
+        float fade = Mathf.Clamp01(speed * 1.35f);
+        float swing = Mathf.Sin(proceduralWalkTime) * 28f * fade;
+        float counterSwing = -swing;
+        float leftKneeBend = Mathf.Max(0f, Mathf.Sin(proceduralWalkTime + Mathf.PI * 0.5f)) * 18f * fade;
+        float rightKneeBend = Mathf.Max(0f, Mathf.Sin(proceduralWalkTime - Mathf.PI * 0.5f)) * 18f * fade;
+        float footLift = Mathf.Sin(proceduralWalkTime) * 8f * fade;
+
+        proceduralLeftArm.localRotation = proceduralLeftArmRest * Quaternion.Euler(counterSwing, 0f, 0f);
+        proceduralRightArm.localRotation = proceduralRightArmRest * Quaternion.Euler(swing, 0f, 0f);
+        proceduralLeftUpLeg.localRotation = proceduralLeftUpLegRest * Quaternion.Euler(swing, 0f, 0f);
+        proceduralRightUpLeg.localRotation = proceduralRightUpLegRest * Quaternion.Euler(counterSwing, 0f, 0f);
+
+        if (proceduralLeftForeArm != null)
+        {
+            proceduralLeftForeArm.localRotation = proceduralLeftForeArmRest * Quaternion.Euler(-8f * fade, 0f, 0f);
+        }
+        if (proceduralRightForeArm != null)
+        {
+            proceduralRightForeArm.localRotation = proceduralRightForeArmRest * Quaternion.Euler(-8f * fade, 0f, 0f);
+        }
+        if (proceduralLeftLeg != null)
+        {
+            proceduralLeftLeg.localRotation = proceduralLeftLegRest * Quaternion.Euler(leftKneeBend, 0f, 0f);
+        }
+        if (proceduralRightLeg != null)
+        {
+            proceduralRightLeg.localRotation = proceduralRightLegRest * Quaternion.Euler(rightKneeBend, 0f, 0f);
+        }
+        if (proceduralLeftFoot != null)
+        {
+            proceduralLeftFoot.localRotation = proceduralLeftFootRest * Quaternion.Euler(-footLift, 0f, 0f);
+        }
+        if (proceduralRightFoot != null)
+        {
+            proceduralRightFoot.localRotation = proceduralRightFootRest * Quaternion.Euler(footLift, 0f, 0f);
         }
     }
 

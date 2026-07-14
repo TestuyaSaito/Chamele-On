@@ -94,6 +94,8 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
     private Vector3 attachedNormal;
     private PaintableBodyPart lastPaintPart;
     private Vector2 lastPaintUv;
+    private Vector3 lastPaintNormal;
+    private bool hasLastPaintNormal;
     private bool sampleEnvironment;
     private Coroutine screenColorSampleRoutine;
     private Texture2D screenColorSamplePixel;
@@ -102,10 +104,6 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
     private bool pointerStartedAsSample;
     private bool pointerStartedOnUi;
     private float lastManualCameraInputTime = -10f;
-    private bool hasLatchedMovementHeading;
-    private float latchedMovementHeadingYaw;
-    private float lastMovementInputAngle;
-
     private Material floorMaterial;
     private Material wallMaterial;
     private Material accentMaterial;
@@ -478,6 +476,9 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
         mannequin = player.AddComponent<RuntimeMannequin>();
         mannequin.Build();
         mannequin.SetMaterialResponse(metallic, smoothness);
+        Vector3 groundedPosition = playerRoot.position;
+        groundedPosition.y = FindGroundedRootY(groundedPosition);
+        playerRoot.position = groundedPosition;
         PreparePaintUndoBuffers();
 
         cameraRig.Initialize(gameCamera, playerRoot);
@@ -885,7 +886,6 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
 
         if (attached)
         {
-            hasLatchedMovementHeading = false;
             if (cameraRig != null)
             {
                 cameraRig.ClearMovementHeading();
@@ -905,34 +905,17 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
             : Vector3.ProjectOnPlane(gameCamera.transform.forward, Vector3.up).normalized;
         Vector2 movementInput = Vector2.ClampMagnitude(new Vector2(horizontal, vertical), 1f);
         float movementStrength = movementInput.magnitude;
-        Vector3 movement = Vector3.zero;
-        if (movementStrength > 0.14f)
+        Vector3 cameraRight = cameraRig != null
+            ? cameraRig.PlanarRight
+            : Vector3.Cross(Vector3.up, cameraForward).normalized;
+        // Rebuild the travel vector every frame so held WASD input follows a
+        // camera that is being orbited at the same time.
+        Vector3 movement = movementStrength > 0.14f
+            ? cameraRight * movementInput.x + cameraForward * movementInput.y
+            : Vector3.zero;
+        if (movement.sqrMagnitude > 1f)
         {
-            float inputAngle = Mathf.Atan2(movementInput.x, movementInput.y) * Mathf.Rad2Deg;
-            if (!hasLatchedMovementHeading)
-            {
-                // Latch a world heading when movement starts. This lets the camera
-                // turn behind that heading without feeding its own rotation back
-                // into movement and making the player run in circles.
-                float cameraHeading = Mathf.Atan2(cameraForward.x, cameraForward.z) * Mathf.Rad2Deg;
-                latchedMovementHeadingYaw = cameraHeading + inputAngle;
-                lastMovementInputAngle = inputAngle;
-                hasLatchedMovementHeading = true;
-            }
-            else
-            {
-                float inputAngleDelta = Mathf.DeltaAngle(lastMovementInputAngle, inputAngle);
-                // Character steering remains continuous. Only the camera rig
-                // applies the deliberate 35-degree/hold-time filter.
-                latchedMovementHeadingYaw += inputAngleDelta;
-                lastMovementInputAngle = inputAngle;
-            }
-
-            movement = Quaternion.Euler(0f, latchedMovementHeadingYaw, 0f) * Vector3.forward * movementStrength;
-        }
-        else
-        {
-            hasLatchedMovementHeading = false;
+            movement.Normalize();
         }
 
         if (characterController.isGrounded)
@@ -954,7 +937,7 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
             playerRoot.rotation = Quaternion.Slerp(playerRoot.rotation, target, Time.deltaTime * 10f);
             if (cameraRig != null)
             {
-                cameraRig.SetMovementHeading(latchedMovementHeadingYaw, movementStrength);
+                cameraRig.SetMovementHeading(Mathf.Atan2(movement.x, movement.z) * Mathf.Rad2Deg, movementStrength);
             }
             else if (Time.unscaledTime - lastManualCameraInputTime > 1.15f)
             {
@@ -1171,13 +1154,22 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
 
         if (!Physics.Raycast(ray, out RaycastHit hit, 50f, 1 << RuntimeMannequin.PaintLayer, QueryTriggerInteraction.Collide))
         {
-            if (!newStroke) lastPaintPart = null;
+            if (!newStroke)
+            {
+                lastPaintPart = null;
+                hasLastPaintNormal = false;
+            }
             return false;
         }
 
         PaintableBodyPart part = hit.collider.GetComponent<PaintableBodyPart>();
         if (part == null)
         {
+            if (!newStroke)
+            {
+                lastPaintPart = null;
+                hasLastPaintNormal = false;
+            }
             return false;
         }
 
@@ -1187,12 +1179,15 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
             return true;
         }
 
+        bool continuesOnSurface = !newStroke && lastPaintPart == part && hasLastPaintNormal &&
+                                  Vector3.Dot(lastPaintNormal, hit.normal) > 0.92f;
+
         if (newStroke)
         {
             CapturePaintUndoState();
         }
 
-        if (newStroke || lastPaintPart != part)
+        if (!continuesOnSurface)
         {
             lastPaintPart = part;
             lastPaintUv = uv;
@@ -1200,10 +1195,14 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
 
         // Pass the hit normal so a cube's overlapping face UVs cannot color
         // its side/back faces along with the face currently under the pointer.
-        part.PaintStroke(lastPaintUv, uv, brushColor, brushRadius, hit.normal);
-        PaintVisibleScreenNeighbors(screenPosition, hit.collider, brushColor, brushRadius);
+        // A sharp edge starts a new UV segment instead of connecting unrelated
+        // face tiles through the atlas.
+        part.PaintStroke(continuesOnSurface ? lastPaintUv : uv, uv, brushColor, brushRadius, hit.normal);
+        PaintVisibleScreenNeighbors(screenPosition, part, brushColor, brushRadius);
         lastPaintPart = part;
         lastPaintUv = uv;
+        lastPaintNormal = hit.normal;
+        hasLastPaintNormal = true;
         return true;
     }
 
@@ -1289,7 +1288,8 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
         return true;
     }
 
-    private void PaintVisibleScreenNeighbors(Vector2 screenPosition, Collider centerCollider, Color color, int radius)
+    private void PaintVisibleScreenNeighbors(Vector2 screenPosition, PaintableBodyPart centerPart,
+        Color color, int radius)
     {
         float normalizedSize = Mathf.InverseLerp(MinimumBrushRadius, MaximumBrushRadius, radius);
         float screenRadius = Mathf.Lerp(4f, 16f, normalizedSize);
@@ -1316,13 +1316,13 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
                 continue;
             }
 
-            if (hit.collider == null || hit.collider == centerCollider)
+            if (hit.collider == null)
             {
                 continue;
             }
 
             PaintableBodyPart part = hit.collider.GetComponent<PaintableBodyPart>();
-            if (part == null)
+            if (part == null || part != centerPart)
             {
                 continue;
             }
@@ -1338,6 +1338,7 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
         pointerStartedAsSample = false;
         pointerStartedOnUi = false;
         lastPaintPart = null;
+        hasLastPaintNormal = false;
     }
 
     private void UpdateCamera(bool immediate)
@@ -1417,6 +1418,71 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
         return hasBounds ? combined.center - playerRoot.position : Vector3.up * (1.05f * CharacterScale);
     }
 
+    private float GetVisualSurfaceOffset(Vector3 surfaceNormal, float fallbackOffset)
+    {
+        if (playerRoot == null)
+        {
+            return fallbackOffset;
+        }
+
+        Vector3 normal = Vector3.ProjectOnPlane(surfaceNormal, Vector3.up);
+        if (normal.sqrMagnitude < 0.0001f)
+        {
+            normal = surfaceNormal;
+        }
+        normal.Normalize();
+
+        Renderer[] renderers = playerRoot.GetComponentsInChildren<Renderer>();
+        bool hasProjection = false;
+        float minimumProjection = 0f;
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            Renderer renderer = renderers[i];
+            if (renderer == null || !renderer.enabled)
+            {
+                continue;
+            }
+
+            Bounds bounds = renderer.bounds;
+            Vector3 minimum = bounds.min;
+            Vector3 maximum = bounds.max;
+            for (int x = 0; x < 2; x++)
+            {
+                for (int y = 0; y < 2; y++)
+                {
+                    for (int z = 0; z < 2; z++)
+                    {
+                        Vector3 corner = new Vector3(
+                            x == 0 ? minimum.x : maximum.x,
+                            y == 0 ? minimum.y : maximum.y,
+                            z == 0 ? minimum.z : maximum.z);
+                        float projection = Vector3.Dot(corner - playerRoot.position, normal);
+                        if (!hasProjection || projection < minimumProjection)
+                        {
+                            minimumProjection = projection;
+                            hasProjection = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        return hasProjection ? Mathf.Max(0.018f * CharacterScale, -minimumProjection + 0.018f * CharacterScale) : fallbackOffset;
+    }
+
+    private float FindGroundedRootY(Vector3 nearPosition)
+    {
+        int mask = ~((1 << RuntimeMannequin.PaintLayer) | (1 << 2));
+        Vector3 origin = nearPosition + Vector3.up * (2.2f * CharacterScale + 0.8f);
+        if (Physics.Raycast(origin, Vector3.down, out RaycastHit hit, 4f, mask, QueryTriggerInteraction.Ignore) &&
+            hit.normal.y > 0.45f)
+        {
+            return hit.point.y + 0.018f;
+        }
+
+        return Mathf.Max(0.02f, nearPosition.y);
+    }
+
     private void ToggleAttach()
     {
         if (attached)
@@ -1453,13 +1519,25 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
         }
 
         attached = true;
-        attachedNormal = bestHit.normal.normalized;
+        attachedNormal = Vector3.ProjectOnPlane(bestHit.normal, Vector3.up);
+        if (attachedNormal.sqrMagnitude < 0.0001f)
+        {
+            attachedNormal = bestHit.normal;
+        }
+        attachedNormal.Normalize();
         characterController.enabled = false;
-        playerRoot.position = bestHit.point + attachedNormal * (0.34f * CharacterScale) -
-                              Vector3.up * (1.00f * CharacterScale);
-        playerRoot.position = new Vector3(playerRoot.position.x, Mathf.Max(0.02f, playerRoot.position.y), playerRoot.position.z);
         playerRoot.rotation = Quaternion.LookRotation(-attachedNormal, Vector3.up);
         mannequin.ApplyPose(3);
+        Vector3 provisionalPosition = bestHit.point + attachedNormal * (0.34f * CharacterScale);
+        provisionalPosition.y = FindGroundedRootY(provisionalPosition);
+        playerRoot.position = provisionalPosition;
+        Physics.SyncTransforms();
+
+        float surfaceOffset = GetVisualSurfaceOffset(attachedNormal, 0.34f * CharacterScale);
+        Vector3 attachedPosition = bestHit.point + attachedNormal * surfaceOffset;
+        attachedPosition.y = FindGroundedRootY(attachedPosition);
+        playerRoot.position = attachedPosition;
+        Physics.SyncTransforms();
         cameraYaw = playerRoot.eulerAngles.y;
         if (cameraRig != null)
         {
@@ -1513,7 +1591,6 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
 
         if (painting)
         {
-            hasLatchedMovementHeading = false;
             paintBrushMode = true;
             if (cameraRig != null)
             {

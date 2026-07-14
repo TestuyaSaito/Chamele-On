@@ -5,10 +5,9 @@ using UnityEngine.Rendering;
 public sealed class RuntimeMannequin : MonoBehaviour, IMannequinVisual
 {
     public const int PaintLayer = 8;
-    // The phone prototype deliberately uses a tiny cube mannequin.  A resource
-    // character can still be added later, but importing a rigged asset here
-    // makes the first playable build slower and breaks the simple voxel look.
-    private static readonly bool UseRiggedResource = false;
+    // Prefer the imported character asset. If Unity cannot import it as a
+    // paintable rigged mesh, Build() falls back to the procedural block body.
+    private static readonly bool UseRiggedResource = true;
 
     private sealed class BodyPiece
     {
@@ -76,12 +75,15 @@ public sealed class RuntimeMannequin : MonoBehaviour, IMannequinVisual
         // silhouette that stays readable when painted on a phone screen.
         CreatePart("Pelvis", PrimitiveType.Cube, new Vector3(0f, 0.98f, 0f), new Vector3(0.56f, 0.50f, 0.36f), Vector3.zero);
         CreatePart("Torso", PrimitiveType.Cube, new Vector3(0f, 1.63f, 0f), new Vector3(0.49f, 0.82f, 0.31f), Vector3.zero);
-        CreatePart("Head", PrimitiveType.Cube, new Vector3(0f, 2.43f, 0f), new Vector3(0.56f, 0.58f, 0.52f), Vector3.zero);
+        // Keep the default silhouette as one connected Minecraft-style block
+        // body: the head touches the torso, arms meet the shoulders, and hands
+        // meet the lower ends of the arms.
+        CreatePart("Head", PrimitiveType.Cube, new Vector3(0f, 2.32f, 0f), new Vector3(0.56f, 0.58f, 0.52f), Vector3.zero);
 
-        CreatePart("ArmL", PrimitiveType.Cube, new Vector3(-0.63f, 1.57f, 0f), new Vector3(0.17f, 0.82f, 0.17f), Vector3.zero);
-        CreatePart("ArmR", PrimitiveType.Cube, new Vector3(0.63f, 1.57f, 0f), new Vector3(0.17f, 0.82f, 0.17f), Vector3.zero);
-        CreatePart("HandL", PrimitiveType.Cube, new Vector3(-0.63f, 0.97f, 0f), Vector3.one * 0.22f, Vector3.zero);
-        CreatePart("HandR", PrimitiveType.Cube, new Vector3(0.63f, 0.97f, 0f), Vector3.one * 0.22f, Vector3.zero);
+        CreatePart("ArmL", PrimitiveType.Cube, new Vector3(-0.33f, 1.62f, 0f), new Vector3(0.17f, 0.84f, 0.17f), Vector3.zero);
+        CreatePart("ArmR", PrimitiveType.Cube, new Vector3(0.33f, 1.62f, 0f), new Vector3(0.17f, 0.84f, 0.17f), Vector3.zero);
+        CreatePart("HandL", PrimitiveType.Cube, new Vector3(-0.33f, 1.095f, 0f), Vector3.one * 0.22f, Vector3.zero);
+        CreatePart("HandR", PrimitiveType.Cube, new Vector3(0.33f, 1.095f, 0f), Vector3.one * 0.22f, Vector3.zero);
 
         CreatePart("LegL", PrimitiveType.Cube, new Vector3(-0.25f, 0.43f, 0f), new Vector3(0.20f, 0.72f, 0.21f), Vector3.zero);
         CreatePart("LegR", PrimitiveType.Cube, new Vector3(0.25f, 0.43f, 0f), new Vector3(0.20f, 0.72f, 0.21f), Vector3.zero);
@@ -381,7 +383,9 @@ public sealed class RuntimeMannequin : MonoBehaviour, IMannequinVisual
         int rows = 2;
         int column = faceIndex % columns;
         int row = faceIndex / columns;
-        float margin = 0.018f;
+        // Point-filtered runtime atlases do not need a wide gutter. Keeping
+        // the face tiles edge-to-edge removes the white seam at cube corners.
+        float margin = 0.0f;
         Vector2 tileSize = new Vector2(1f / columns, 1f / rows);
         Vector2 tileMin = new Vector2(column * tileSize.x + margin, row * tileSize.y + margin);
         Vector2 usableSize = tileSize - Vector2.one * (margin * 2f);
