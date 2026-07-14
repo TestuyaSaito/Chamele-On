@@ -88,6 +88,18 @@ internal static class ChameleonInput
         }
     }
 
+    public static Vector2 MouseScrollDelta
+    {
+        get
+        {
+#if ENABLE_INPUT_SYSTEM
+            return Mouse.current != null ? Mouse.current.scroll.ReadValue() : Vector2.zero;
+#else
+            return Input.mouseScrollDelta;
+#endif
+        }
+    }
+
     public static bool GetMouseButtonDown(int button)
     {
 #if ENABLE_INPUT_SYSTEM

@@ -20,6 +20,7 @@ public sealed class RuntimeMannequin : MonoBehaviour, IMannequinVisual
 
     private readonly Dictionary<string, BodyPiece> pieces = new Dictionary<string, BodyPiece>();
     private readonly List<PaintableBodyPart> paintableParts = new List<PaintableBodyPart>();
+    private readonly List<Mesh> runtimePaintMeshes = new List<Mesh>();
     private Transform visualRoot;
     private Material paintTemplate;
     private RiggedRuntimeMannequin rigged;
@@ -186,6 +187,13 @@ public sealed class RuntimeMannequin : MonoBehaviour, IMannequinVisual
         Destroy(primitiveCollider);
 
         MeshFilter filter = partObject.GetComponent<MeshFilter>();
+        Mesh paintMesh = CreateFaceIsolatedPaintMesh(filter.sharedMesh, partName);
+        if (paintMesh != null)
+        {
+            filter.sharedMesh = paintMesh;
+            runtimePaintMeshes.Add(paintMesh);
+        }
+
         var paintCollider = partObject.AddComponent<MeshCollider>();
         paintCollider.sharedMesh = filter.sharedMesh;
         paintCollider.convex = false;
@@ -281,8 +289,120 @@ public sealed class RuntimeMannequin : MonoBehaviour, IMannequinVisual
         piece.Transform.localRotation = Quaternion.Euler(euler);
     }
 
+    private static Mesh CreateFaceIsolatedPaintMesh(Mesh source, string partName)
+    {
+        if (source == null || source.vertexCount == 0 || source.triangles == null || source.triangles.Length < 6)
+        {
+            return source;
+        }
+
+        Vector2[] sourceUv = source.uv;
+        Vector3[] sourceVertices = source.vertices;
+        int[] sourceTriangles = source.triangles;
+        if (sourceUv == null || sourceUv.Length != source.vertexCount ||
+            sourceVertices == null || sourceVertices.Length != source.vertexCount)
+        {
+            return source;
+        }
+
+        Mesh mesh = Object.Instantiate(source);
+        mesh.name = partName + " Paint Mesh";
+        Vector2[] remappedUv = new Vector2[sourceUv.Length];
+        int[] vertexFace = new int[sourceUv.Length];
+        for (int i = 0; i < vertexFace.Length; i++)
+        {
+            vertexFace[i] = -1;
+        }
+
+        var faceNormals = new List<Vector3>(6);
+        bool hasSharedFaceVertex = false;
+        for (int triangle = 0; triangle + 2 < sourceTriangles.Length; triangle += 3)
+        {
+            int ia = sourceTriangles[triangle];
+            int ib = sourceTriangles[triangle + 1];
+            int ic = sourceTriangles[triangle + 2];
+            if (ia < 0 || ib < 0 || ic < 0 || ia >= sourceVertices.Length ||
+                ib >= sourceVertices.Length || ic >= sourceVertices.Length)
+            {
+                continue;
+            }
+
+            Vector3 faceNormal = Vector3.Cross(sourceVertices[ib] - sourceVertices[ia],
+                sourceVertices[ic] - sourceVertices[ia]).normalized;
+            int faceIndex = -1;
+            for (int i = 0; i < faceNormals.Count; i++)
+            {
+                if (Vector3.Dot(faceNormals[i], faceNormal) > 0.995f)
+                {
+                    faceIndex = i;
+                    break;
+                }
+            }
+
+            if (faceIndex < 0)
+            {
+                faceIndex = faceNormals.Count;
+                faceNormals.Add(faceNormal);
+            }
+
+            if (AssignFaceUv(ia, faceIndex, sourceUv, remappedUv, vertexFace) ||
+                AssignFaceUv(ib, faceIndex, sourceUv, remappedUv, vertexFace) ||
+                AssignFaceUv(ic, faceIndex, sourceUv, remappedUv, vertexFace))
+            {
+                hasSharedFaceVertex = true;
+            }
+        }
+
+        // Unity's primitive cube has duplicated vertices per face, so this is
+        // normally false. Do not mutate a mesh with shared vertices because one
+        // vertex cannot carry two different face UVs.
+        if (hasSharedFaceVertex)
+        {
+            Object.Destroy(mesh);
+            return source;
+        }
+
+        mesh.uv = remappedUv;
+        mesh.uv2 = remappedUv;
+        mesh.UploadMeshData(false);
+        return mesh;
+    }
+
+    private static bool AssignFaceUv(int vertexIndex, int faceIndex, Vector2[] sourceUv,
+        Vector2[] destinationUv, int[] vertexFace)
+    {
+        if (vertexFace[vertexIndex] >= 0 && vertexFace[vertexIndex] != faceIndex)
+        {
+            return true;
+        }
+
+        vertexFace[vertexIndex] = faceIndex;
+        int columns = 3;
+        int rows = 2;
+        int column = faceIndex % columns;
+        int row = faceIndex / columns;
+        float margin = 0.018f;
+        Vector2 tileSize = new Vector2(1f / columns, 1f / rows);
+        Vector2 tileMin = new Vector2(column * tileSize.x + margin, row * tileSize.y + margin);
+        Vector2 usableSize = tileSize - Vector2.one * (margin * 2f);
+        Vector2 localUv = Vector2.ClampMagnitude(sourceUv[vertexIndex], 1.4143f);
+        localUv.x = Mathf.Clamp01(localUv.x);
+        localUv.y = Mathf.Clamp01(localUv.y);
+        destinationUv[vertexIndex] = tileMin + Vector2.Scale(localUv, usableSize);
+        return false;
+    }
+
     private void OnDestroy()
     {
+        for (int i = 0; i < runtimePaintMeshes.Count; i++)
+        {
+            if (runtimePaintMeshes[i] != null)
+            {
+                Destroy(runtimePaintMeshes[i]);
+            }
+        }
+        runtimePaintMeshes.Clear();
+
         if (paintTemplate != null)
         {
             Destroy(paintTemplate);

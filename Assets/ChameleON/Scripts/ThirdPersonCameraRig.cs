@@ -3,7 +3,7 @@ using UnityEngine;
 using UnityEngine.EventSystems;
 
 /// <summary>
-/// A package-free, collision-aware third-person orbit camera.
+/// A package-free third-person orbit camera.
 /// AddOrbitInput receives yaw/pitch deltas in degrees. Call Tick manually after
 /// SetAutoUpdate(false), or leave automatic updating enabled (the default).
 /// </summary>
@@ -16,11 +16,7 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
     [SerializeField] private float orbitDistance = 3.5f;
     [SerializeField] private float normalFieldOfView = 58f;
     [SerializeField] private float focusedShoulderOffset = -0.225f;
-    [SerializeField] private float focusedDistance = 1.45f;
-    [SerializeField] private float focusedFieldOfView = 50f;
     [SerializeField] private float attachedShoulderOffset;
-    [SerializeField] private float attachedDistance = 1.3f;
-    [SerializeField] private float attachedFieldOfView = 52f;
 
     [Header("Orbit")]
     [SerializeField] private float minimumPitch = -12f;
@@ -47,20 +43,20 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
     [SerializeField] private float movementFollowReleaseDeadZone = 8f;
     [SerializeField] private float movementFollowMinimumStrength = 0.15f;
 
-    [Header("Collision")]
-    [SerializeField] private LayerMask collisionMask = ~0;
-    [SerializeField] private float collisionRadius = 0.24f;
-    [SerializeField] private float collisionPadding = 0.08f;
-    [SerializeField] private float minimumDistance = 0.42f;
-    [SerializeField] private float collisionReleaseSmoothTime = 0.18f;
+    [Header("Manual Zoom")]
+    [Tooltip("The closest distance the player can choose with the wheel or a pinch.")]
+    [SerializeField] private float minimumZoomDistance = 2.0f;
+    [Tooltip("The furthest distance the player can choose with the wheel or a pinch.")]
+    [SerializeField] private float maximumZoomDistance = 8.0f;
+    [Tooltip("World units of zoom per mouse-wheel tick. Scroll down moves the camera out.")]
+    [SerializeField] private float mouseWheelZoomSensitivity = 0.45f;
+    [Tooltip("World units of zoom per screen pixel of pinch movement.")]
+    [SerializeField] private float pinchZoomSensitivity = 0.012f;
 
     [Header("Runtime")]
     [SerializeField] private bool autoUpdate = true;
     [SerializeField] private bool readLegacyPointerInput = true;
 
-    private const int CollisionHitCapacity = 48;
-
-    private readonly RaycastHit[] collisionHits = new RaycastHit[CollisionHitCapacity];
     private readonly HashSet<int> uiBlockedTouches = new HashSet<int>();
 
     private Camera drivenCamera;
@@ -95,6 +91,8 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
     private Vector3 targetPositionVelocity;
     private Vector2 queuedOrbitDegrees;
     private Vector3 lastMousePosition;
+    private bool pinchActive;
+    private float lastPinchDistance;
 
     public Camera DrivenCamera => drivenCamera;
     public Transform Target => followTarget;
@@ -111,6 +109,21 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
         {
             ClearMovementHeading();
         }
+    }
+
+    /// <summary>
+    /// Changes camera distance only from an explicit user zoom gesture. Positive
+    /// values move the camera out; collisions and pose changes never call this.
+    /// </summary>
+    public void AddZoomInput(float distanceDelta)
+    {
+        if (!initialized || float.IsNaN(distanceDelta) || float.IsInfinity(distanceDelta) ||
+            Mathf.Abs(distanceDelta) < 0.0001f)
+        {
+            return;
+        }
+
+        orbitDistance = Mathf.Clamp(orbitDistance + distanceDelta, minimumZoomDistance, maximumZoomDistance);
     }
 
     /// <summary>Camera-relative forward projected onto the horizontal plane.</summary>
@@ -196,9 +209,8 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
     }
 
     /// <summary>
-    /// Enables the closer wall-attachment framing. Attachment controls distance
-    /// and field of view; focused paint composition still wins for the lateral
-    /// shoulder offset when both modes are active.
+    /// Enables the wall-attachment framing. Attachment may change the target
+    /// offset, but it never changes the user's orbit distance or field of view.
     /// </summary>
     public void SetAttachedMode(bool isAttached)
     {
@@ -359,7 +371,65 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
     private void CollectLegacyPointerInput()
     {
         CollectMouseInput();
+        CollectZoomInput();
         CollectTouchInput();
+    }
+
+    private void CollectZoomInput()
+    {
+        Vector2 wheel = ChameleonInput.MouseScrollDelta;
+        if (Mathf.Abs(wheel.y) > 0.0001f && !IsPointerOverUi())
+        {
+            // Unity reports a positive wheel value for scrolling up. Scrolling
+            // down therefore increases the orbit distance (zooms out).
+            AddZoomInput(-wheel.y * mouseWheelZoomSensitivity);
+        }
+
+        int firstTouch = -1;
+        int secondTouch = -1;
+        for (int i = 0; i < ChameleonInput.TouchCount; i++)
+        {
+            ChameleonTouch touch = ChameleonInput.GetTouch(i);
+            if (touch.Phase == TouchPhase.Ended || touch.Phase == TouchPhase.Canceled ||
+                ChameleonInput.IsPointerOverUi(touch.Position))
+            {
+                continue;
+            }
+
+            if (firstTouch < 0) firstTouch = i;
+            else
+            {
+                secondTouch = i;
+                break;
+            }
+        }
+
+        if (firstTouch < 0 || secondTouch < 0)
+        {
+            ResetPinchTracking();
+            return;
+        }
+
+        Vector2 firstPosition = ChameleonInput.GetTouch(firstTouch).Position;
+        Vector2 secondPosition = ChameleonInput.GetTouch(secondTouch).Position;
+        float pinchDistance = Vector2.Distance(firstPosition, secondPosition);
+        if (!pinchActive)
+        {
+            pinchActive = true;
+            lastPinchDistance = pinchDistance;
+            return;
+        }
+
+        float distanceDelta = pinchDistance - lastPinchDistance;
+        lastPinchDistance = pinchDistance;
+        // Fingers moving apart zoom in; fingers moving together zoom out.
+        AddZoomInput(-distanceDelta * pinchZoomSensitivity);
+    }
+
+    private void ResetPinchTracking()
+    {
+        pinchActive = false;
+        lastPinchDistance = 0f;
     }
 
     private void CollectMouseInput()
@@ -392,6 +462,13 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
 
     private void CollectTouchInput()
     {
+        if (pinchActive)
+        {
+            // A two-finger gesture belongs exclusively to zoom. Do not let the
+            // first finger also rotate the orbit while the pinch is active.
+            orbitTouchId = -1;
+        }
+
         for (int i = 0; i < ChameleonInput.TouchCount; i++)
         {
             ChameleonTouch touch = ChameleonInput.GetTouch(i);
@@ -403,7 +480,7 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
                 {
                     uiBlockedTouches.Add(touch.FingerId);
                 }
-                else if (orbitTouchId < 0)
+                else if (!pinchActive && orbitTouchId < 0)
                 {
                     orbitTouchId = touch.FingerId;
                 }
@@ -426,6 +503,11 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
                 {
                     orbitTouchId = -1;
                 }
+            }
+
+            if (pinchActive)
+            {
+                continue;
             }
         }
     }
@@ -453,19 +535,20 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
 
         Quaternion orbit = Quaternion.Euler(currentPitch, currentYaw, 0f);
         Vector3 castDirection = -(orbit * Vector3.forward);
+        // Keep the orbit distance stable when the player approaches a wall or
+        // prop. The old SphereCast safety pass silently pulled the camera in,
+        // which looked like an unwanted zoom. Distance now changes only through
+        // AddZoomInput (mouse wheel or pinch).
         float requestedDistance = GetModeDistance();
-        float safeDistance = FindSafeDistance(smoothedTargetPosition, castDirection, requestedDistance);
-
-        if (immediate || safeDistance < currentDistance)
+        if (immediate || Mathf.Abs(requestedDistance - currentDistance) < 0.0001f)
         {
-            // Obstructions must pull the camera in immediately; easing inward can cross a wall.
-            currentDistance = safeDistance;
+            currentDistance = requestedDistance;
             distanceVelocity = 0f;
         }
         else
         {
-            currentDistance = Mathf.SmoothDamp(currentDistance, safeDistance, ref distanceVelocity,
-                collisionReleaseSmoothTime, Mathf.Infinity, smoothDelta);
+            currentDistance = Mathf.SmoothDamp(currentDistance, requestedDistance, ref distanceVelocity,
+                0.08f, Mathf.Infinity, smoothDelta);
         }
 
         float targetFov = GetModeFieldOfView();
@@ -575,53 +658,12 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
         pendingMovementTurnDirection = 0f;
     }
 
-    private float FindSafeDistance(Vector3 origin, Vector3 direction, float requestedDistance)
-    {
-        float radius = Mathf.Max(collisionRadius, CalculateNearPlaneRadius());
-        int hitCount = Physics.SphereCastNonAlloc(origin, radius, direction, collisionHits,
-            requestedDistance, collisionMask, QueryTriggerInteraction.Ignore);
-
-        float nearestDistance = requestedDistance;
-        for (int i = 0; i < hitCount; i++)
-        {
-            Collider hitCollider = collisionHits[i].collider;
-            if (hitCollider == null || ShouldIgnoreCollider(hitCollider))
-            {
-                continue;
-            }
-
-            nearestDistance = Mathf.Min(nearestDistance, collisionHits[i].distance - collisionPadding);
-        }
-
-        // A wall can be closer than the preferred minimum framing distance (for
-        // example when the target is pressed flat against it). Collision safety
-        // wins in that case, so allow the camera to pull almost all the way into
-        // the target rather than placing it on the far side of the obstruction.
-        float absoluteMinimum = Mathf.Min(minimumDistance, 0.05f);
-        return Mathf.Clamp(nearestDistance, absoluteMinimum, requestedDistance);
-    }
-
-    private bool ShouldIgnoreCollider(Collider candidate)
-    {
-        Transform candidateTransform = candidate.transform;
-        return candidateTransform == followTarget || candidateTransform.IsChildOf(followTarget);
-    }
-
-    private float CalculateNearPlaneRadius()
-    {
-        float halfHeight = Mathf.Tan(drivenCamera.fieldOfView * 0.5f * Mathf.Deg2Rad) * drivenCamera.nearClipPlane;
-        float halfWidth = halfHeight * drivenCamera.aspect;
-        return Mathf.Sqrt(halfWidth * halfWidth + halfHeight * halfHeight) + 0.025f;
-    }
-
     private float GetModeDistance()
     {
-        float requestedDistance = attachedMode
-            ? attachedDistance
-            : focusedMode
-                ? focusedDistance
-                : orbitDistance;
-        return Mathf.Max(minimumDistance, requestedDistance);
+        // Focus/attach changes may adjust the target framing, but never the
+        // user's camera distance. This prevents paint mode or a nearby object
+        // from changing the zoom without an explicit gesture.
+        return Mathf.Clamp(orbitDistance, minimumZoomDistance, maximumZoomDistance);
     }
 
     private Vector3 CalculateRawAnchor(float yaw)
@@ -637,11 +679,8 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
 
     private float GetModeFieldOfView()
     {
-        return attachedMode
-            ? attachedFieldOfView
-            : focusedMode
-                ? focusedFieldOfView
-                : normalFieldOfView;
+        // FOV changes are another form of automatic zoom, so keep it fixed.
+        return normalFieldOfView;
     }
 
     private float ClampPitch(float pitch)
@@ -665,6 +704,7 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
         mouseDragBlocked = false;
         orbitTouchId = -1;
         uiBlockedTouches.Clear();
+        ResetPinchTracking();
     }
 
     private void OnDisable()
@@ -677,11 +717,11 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
         minimumPitch = Mathf.Clamp(minimumPitch, -89f, 88f);
         maximumPitch = Mathf.Clamp(maximumPitch, minimumPitch + 1f, 89f);
         orbitDistance = Mathf.Max(0.5f, orbitDistance);
-        focusedDistance = Mathf.Max(0.5f, focusedDistance);
-        attachedDistance = Mathf.Max(0.5f, attachedDistance);
-        minimumDistance = Mathf.Max(0.05f, minimumDistance);
-        collisionRadius = Mathf.Max(0.01f, collisionRadius);
-        collisionPadding = Mathf.Max(0f, collisionPadding);
+        minimumZoomDistance = Mathf.Max(0.5f, minimumZoomDistance);
+        maximumZoomDistance = Mathf.Max(minimumZoomDistance, maximumZoomDistance);
+        orbitDistance = Mathf.Clamp(orbitDistance, minimumZoomDistance, maximumZoomDistance);
+        mouseWheelZoomSensitivity = Mathf.Max(0.001f, mouseWheelZoomSensitivity);
+        pinchZoomSensitivity = Mathf.Max(0.0001f, pinchZoomSensitivity);
         shoulderOffset = Mathf.Clamp(shoulderOffset, -0.8f, 0.8f);
         focusedShoulderOffset = Mathf.Clamp(focusedShoulderOffset, -0.8f, 0.8f);
         attachedShoulderOffset = Mathf.Clamp(attachedShoulderOffset, -0.8f, 0.8f);
@@ -694,9 +734,6 @@ public sealed class ThirdPersonCameraRig : MonoBehaviour
         movementFollowReleaseDeadZone = Mathf.Clamp(movementFollowReleaseDeadZone, 0f,
             movementFollowActivationAngle - 1f);
         movementFollowMinimumStrength = Mathf.Clamp01(movementFollowMinimumStrength);
-        collisionReleaseSmoothTime = Mathf.Max(0.001f, collisionReleaseSmoothTime);
         normalFieldOfView = Mathf.Clamp(normalFieldOfView, 15f, 100f);
-        focusedFieldOfView = Mathf.Clamp(focusedFieldOfView, 15f, 100f);
-        attachedFieldOfView = Mathf.Clamp(attachedFieldOfView, 15f, 100f);
     }
 }

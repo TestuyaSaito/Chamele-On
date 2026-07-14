@@ -54,3 +54,6 @@ AuthKey_*.p8
 .env
 .env.*
 !.env.example
+
+# Unity AI Assistant local editor preferences
+/ProjectSettings/Packages/com.unity.ai.assistant/

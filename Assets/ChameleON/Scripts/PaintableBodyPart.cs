@@ -14,15 +14,17 @@ internal sealed class SharedBodyPaintTexture
         Texture = new Texture2D(resolution, resolution, TextureFormat.RGBA32, false)
         {
             name = textureName,
-            filterMode = FilterMode.Bilinear,
+            filterMode = FilterMode.Point,
             wrapMode = TextureWrapMode.Clamp,
-            anisoLevel = 4
+            anisoLevel = 0
         };
 
         Reset();
     }
 
     public Texture2D Texture { get; private set; }
+
+    public int Resolution => resolution;
 
     public void Reset()
     {
@@ -40,7 +42,8 @@ internal sealed class SharedBodyPaintTexture
         Upload();
     }
 
-    public void PaintStroke(Vector2 fromUv, Vector2 toUv, Color color, int radius)
+    public void PaintStroke(Vector2 fromUv, Vector2 toUv, Color color, int radius,
+        bool[] allowedPixels = null)
     {
         if (Texture == null)
         {
@@ -56,7 +59,7 @@ internal sealed class SharedBodyPaintTexture
 
         if (crossesSeam)
         {
-            DrawCircle(toUv, color, pixelRadius);
+            DrawCircle(toUv, color, pixelRadius, allowedPixels);
             Upload();
             return;
         }
@@ -64,7 +67,7 @@ internal sealed class SharedBodyPaintTexture
         int steps = Mathf.Max(1, Mathf.CeilToInt(delta.magnitude * resolution / Mathf.Max(1f, pixelRadius * 0.42f)));
         for (int i = 0; i <= steps; i++)
         {
-            DrawCircle(Vector2.Lerp(fromUv, toUv, i / (float)steps), color, pixelRadius);
+            DrawCircle(Vector2.Lerp(fromUv, toUv, i / (float)steps), color, pixelRadius, allowedPixels);
         }
 
         Upload();
@@ -111,7 +114,7 @@ internal sealed class SharedBodyPaintTexture
         }
     }
 
-    private void DrawCircle(Vector2 uv, Color color, int radius)
+    private void DrawCircle(Vector2 uv, Color color, int radius, bool[] allowedPixels)
     {
         int centerX = Mathf.RoundToInt(Mathf.Clamp01(uv.x) * (resolution - 1));
         int centerY = Mathf.RoundToInt(Mathf.Clamp01(uv.y) * (resolution - 1));
@@ -136,7 +139,11 @@ internal sealed class SharedBodyPaintTexture
                 int px = centerX + x;
                 if (px >= 0 && px < resolution)
                 {
-                    pixels[py * resolution + px] = brush;
+                    int pixelIndex = py * resolution + px;
+                    if (allowedPixels == null || allowedPixels.Length != pixels.Length || allowedPixels[pixelIndex])
+                    {
+                        pixels[pixelIndex] = brush;
+                    }
                 }
             }
         }
@@ -155,6 +162,17 @@ public sealed class PaintableBodyPart : MonoBehaviour
     private Material[] runtimeMaterials;
     private Renderer paintRenderer;
     private MaterialPropertyBlock paintProperties;
+    // Shared paint textures are sampled in UV space.  Keep a per-renderer
+    // triangle mask so a circular brush cannot cross from one UV island (for
+    // example a cube's front face) into a neighbouring island (its side face).
+    private bool[] paintMask;
+    private bool[] surfacePaintMask;
+    private Mesh paintMesh;
+    private Vector2[] paintUv;
+    private int[] paintTriangles;
+    private Vector3[] paintVertices;
+    private Vector3 surfaceMaskNormal;
+    private bool surfaceMaskValid;
     private bool ownsPaintData;
 
     public Texture2D PaintTexture => paintData != null ? paintData.Texture : null;
@@ -177,7 +195,27 @@ public sealed class PaintableBodyPart : MonoBehaviour
 
     public void PaintStroke(Vector2 fromUv, Vector2 toUv, Color color, int radius)
     {
-        paintData?.PaintStroke(fromUv, toUv, color, radius);
+        paintData?.PaintStroke(fromUv, toUv, color, radius, paintMask);
+    }
+
+    // The procedural mannequin uses a cube UV layout where every face occupies
+    // the same 0..1 square. A UV-only brush would therefore paint the front,
+    // back, and side faces together. Restrict this stroke to triangles whose
+    // surface normal matches the face currently under the pointer.
+    public void PaintStroke(Vector2 fromUv, Vector2 toUv, Color color, int radius, Vector3 worldNormal)
+    {
+        if (paintData == null)
+        {
+            return;
+        }
+
+        bool[] mask = paintMask;
+        if (paintRenderer is MeshRenderer && BuildSurfacePaintMask(worldNormal))
+        {
+            mask = surfacePaintMask;
+        }
+
+        paintData.PaintStroke(fromUv, toUv, color, radius, mask);
     }
 
     public Color Sample(Vector2 uv)
@@ -268,6 +306,7 @@ public sealed class PaintableBodyPart : MonoBehaviour
         paintData = shared;
         ownsPaintData = ownsShared;
         paintRenderer = targetRenderer;
+        BuildPaintMask();
 
         if (targetRenderer == null || template == null)
         {
@@ -343,5 +382,190 @@ public sealed class PaintableBodyPart : MonoBehaviour
         paintData = null;
         paintRenderer = null;
         paintProperties = null;
+        paintMask = null;
+        surfacePaintMask = null;
+        paintMesh = null;
+        paintUv = null;
+        paintTriangles = null;
+        paintVertices = null;
+        surfaceMaskValid = false;
+    }
+
+    private void BuildPaintMask()
+    {
+        paintMask = null;
+        if (paintData == null || paintRenderer == null)
+        {
+            return;
+        }
+
+        Mesh mesh = null;
+        if (paintRenderer is SkinnedMeshRenderer skinned)
+        {
+            mesh = skinned.sharedMesh;
+        }
+        else
+        {
+            MeshFilter filter = paintRenderer.GetComponent<MeshFilter>();
+            mesh = filter != null ? filter.sharedMesh : null;
+        }
+
+        if (mesh == null || mesh.vertexCount == 0)
+        {
+            return;
+        }
+
+        Vector2[] uv = mesh.uv;
+        int[] triangles = mesh.triangles;
+        Vector3[] vertices = mesh.vertices;
+        int resolution = paintData.Resolution;
+        if (uv == null || uv.Length != mesh.vertexCount || vertices == null || vertices.Length != mesh.vertexCount ||
+            triangles == null || triangles.Length < 3 || resolution < 2)
+        {
+            return;
+        }
+
+        paintMesh = mesh;
+        paintUv = uv;
+        paintTriangles = triangles;
+        paintVertices = vertices;
+        paintMask = new bool[resolution * resolution];
+        for (int triangle = 0; triangle + 2 < triangles.Length; triangle += 3)
+        {
+            RasterizeTriangle(paintMask, triangle, resolution);
+        }
+    }
+
+    private bool BuildSurfacePaintMask(Vector3 worldNormal)
+    {
+        if (paintData == null || paintMesh == null || paintUv == null || paintTriangles == null || paintVertices == null)
+        {
+            return false;
+        }
+
+        Vector3 localNormal = paintRenderer.transform.InverseTransformDirection(worldNormal).normalized;
+        if (localNormal.sqrMagnitude < 0.25f)
+        {
+            return false;
+        }
+
+        if (surfaceMaskValid && Vector3.Dot(surfaceMaskNormal, localNormal) > 0.995f)
+        {
+            return true;
+        }
+
+        int pixelCount = paintData.Resolution * paintData.Resolution;
+        if (surfacePaintMask == null || surfacePaintMask.Length != pixelCount)
+        {
+            surfacePaintMask = new bool[pixelCount];
+        }
+        System.Array.Clear(surfacePaintMask, 0, surfacePaintMask.Length);
+
+        int matchingTriangles = RasterizeMatchingSurface(surfacePaintMask, localNormal, 0.90f);
+        // A few imported meshes have reversed winding. If no triangle matched,
+        // try the opposite orientation without weakening the side isolation.
+        if (matchingTriangles == 0)
+        {
+            System.Array.Clear(surfacePaintMask, 0, surfacePaintMask.Length);
+            matchingTriangles = RasterizeMatchingSurface(surfacePaintMask, -localNormal, 0.90f);
+        }
+
+        if (matchingTriangles == 0)
+        {
+            surfaceMaskValid = false;
+            return false;
+        }
+
+        surfaceMaskNormal = localNormal;
+        surfaceMaskValid = true;
+        return true;
+    }
+
+    private int RasterizeMatchingSurface(bool[] destination, Vector3 normal, float threshold)
+    {
+        int matchingTriangles = 0;
+        for (int triangle = 0; triangle + 2 < paintTriangles.Length; triangle += 3)
+        {
+            int ia = paintTriangles[triangle];
+            int ib = paintTriangles[triangle + 1];
+            int ic = paintTriangles[triangle + 2];
+            if (ia < 0 || ib < 0 || ic < 0 || ia >= paintVertices.Length ||
+                ib >= paintVertices.Length || ic >= paintVertices.Length)
+            {
+                continue;
+            }
+
+            Vector3 triangleNormal = Vector3.Cross(paintVertices[ib] - paintVertices[ia],
+                paintVertices[ic] - paintVertices[ia]).normalized;
+            if (Vector3.Dot(triangleNormal, normal) < threshold)
+            {
+                continue;
+            }
+
+            RasterizeTriangle(destination, triangle, paintData.Resolution);
+            matchingTriangles++;
+        }
+
+        return matchingTriangles;
+    }
+
+    private void RasterizeTriangle(bool[] destination, int triangle, int resolution)
+    {
+        int ia = paintTriangles[triangle];
+        int ib = paintTriangles[triangle + 1];
+        int ic = paintTriangles[triangle + 2];
+        if (ia < 0 || ib < 0 || ic < 0 || ia >= paintUv.Length || ib >= paintUv.Length || ic >= paintUv.Length)
+        {
+            return;
+        }
+
+        Vector2 a = paintUv[ia];
+        Vector2 b = paintUv[ib];
+        Vector2 c = paintUv[ic];
+        float area = Cross(b - a, c - a);
+        if (Mathf.Abs(area) < 0.000001f)
+        {
+            return;
+        }
+
+        float maxPixel = resolution - 1f;
+        Vector2 minimum = Vector2.Min(a, Vector2.Min(b, c));
+        Vector2 maximum = Vector2.Max(a, Vector2.Max(b, c));
+        int minX = Mathf.Clamp(Mathf.FloorToInt(minimum.x * maxPixel), 0, resolution - 1);
+        int maxX = Mathf.Clamp(Mathf.CeilToInt(maximum.x * maxPixel), 0, resolution - 1);
+        int minY = Mathf.Clamp(Mathf.FloorToInt(minimum.y * maxPixel), 0, resolution - 1);
+        int maxY = Mathf.Clamp(Mathf.CeilToInt(maximum.y * maxPixel), 0, resolution - 1);
+
+        for (int y = minY; y <= maxY; y++)
+        {
+            float v = y / maxPixel;
+            for (int x = minX; x <= maxX; x++)
+            {
+                float u = x / maxPixel;
+                if (PointInTriangle(new Vector2(u, v), a, b, c, area))
+                {
+                    destination[y * resolution + x] = true;
+                }
+            }
+        }
+    }
+
+    private static float Cross(Vector2 left, Vector2 right)
+    {
+        return left.x * right.y - left.y * right.x;
+    }
+
+    private static bool PointInTriangle(Vector2 point, Vector2 a, Vector2 b, Vector2 c, float signedArea)
+    {
+        const float edgeTolerance = 0.0001f;
+        float ab = Cross(b - a, point - a);
+        float bc = Cross(c - b, point - b);
+        float ca = Cross(a - c, point - c);
+        if (signedArea > 0f)
+        {
+            return ab >= -edgeTolerance && bc >= -edgeTolerance && ca >= -edgeTolerance;
+        }
+
+        return ab <= edgeTolerance && bc <= edgeTolerance && ca <= edgeTolerance;
     }
 }

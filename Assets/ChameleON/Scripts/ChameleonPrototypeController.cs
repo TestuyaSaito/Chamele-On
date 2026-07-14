@@ -19,7 +19,7 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
     private const float AttachedMovementSpeed = 2.1f * CharacterScale;
     private const int MinimumBrushRadius = 3;
     private const int MaximumBrushRadius = 34;
-    private const int MaximumPaintUndoSteps = 8;
+    private const int MaximumPaintUndoSteps = 12;
 
     private sealed class PaintTextureSnapshot
     {
@@ -75,6 +75,10 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
     private Button sampleButton;
     private Text sampleButtonText;
     private Button undoButton;
+    private Button redoButton;
+    private Text historyText;
+    private Button brushModeButton;
+    private Text brushModeButtonText;
 
     private PlayMode playMode;
     private Color brushColor = new Color(0.12f, 0.16f, 0.20f);
@@ -86,6 +90,7 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
     private float cameraDistance = 3.5f;
     private float verticalVelocity;
     private bool attached;
+    private bool paintBrushMode = true;
     private Vector3 attachedNormal;
     private PaintableBodyPart lastPaintPart;
     private Vector2 lastPaintUv;
@@ -111,6 +116,7 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
     private readonly List<Color> swatchColors = new List<Color>();
     private readonly List<Outline> swatchOutlines = new List<Outline>();
     private readonly List<PaintUndoState> paintUndoHistory = new List<PaintUndoState>();
+    private readonly List<PaintUndoState> paintRedoHistory = new List<PaintUndoState>();
     private readonly Stack<PaintUndoState> paintUndoPool = new Stack<PaintUndoState>();
     private bool authoredEnvironment;
 
@@ -605,76 +611,139 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
         paintHud.transform.SetParent(parent, false);
         Stretch(paintHud.GetComponent<RectTransform>(), Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
 
-        Image toolPanel = CreatePanel("Paint Tools", paintHud.transform, new Color(0.012f, 0.020f, 0.026f, 0.94f));
+        // The paint menu is deliberately composed like a compact art-tool
+        // palette: a clear current-colour card, a swatch tray, a brush card,
+        // surface response, and a dedicated history row.  The controls stay
+        // large enough for a phone thumb, but the hierarchy no longer reads as
+        // a collection of prototype buttons.
+        Image toolPanel = CreatePanel("Paint Tools", paintHud.transform, new Color(0.012f, 0.020f, 0.026f, 0.975f));
         SetRect(toolPanel.rectTransform, new Vector2(0f, 0.50f), new Vector2(0f, 0.50f),
-            new Vector2(470f, 760f), new Vector2(24f, 0f));
+            new Vector2(470f, 780f), new Vector2(24f, -4f));
         Outline panelOutline = toolPanel.gameObject.AddComponent<Outline>();
-        panelOutline.effectColor = new Color(0.35f, 0.86f, 0.67f, 0.24f);
+        panelOutline.effectColor = new Color(0.26f, 0.92f, 0.68f, 0.42f);
         panelOutline.effectDistance = new Vector2(2f, -2f);
 
-        Text heading = CreateText("Paint Heading", toolPanel.transform, "BODY PAINT", 30, TextAnchor.MiddleCenter);
+        Image accentLine = CreateImage("Paint Accent Line", toolPanel.transform, new Color(0.31f, 0.94f, 0.70f, 0.92f));
+        SetRect(accentLine.rectTransform, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f),
+            new Vector2(424f, 5f), new Vector2(0f, -10f));
+
+        Text heading = CreateText("Paint Heading", toolPanel.transform, "CAMO LAB", 30, TextAnchor.MiddleCenter);
         heading.fontStyle = FontStyle.Bold;
         heading.color = new Color(0.76f, 1f, 0.89f);
-        SetRect(heading.rectTransform, new Vector2(0.5f, 0.945f), new Vector2(0.5f, 0.945f),
+        SetRect(heading.rectTransform, new Vector2(0.5f, 0.947f), new Vector2(0.5f, 0.947f),
             new Vector2(400f, 52f), Vector2.zero);
 
-        Text currentColorLabel = CreateText("Current Color Label", toolPanel.transform, "CURRENT COLOR", 17,
-            TextAnchor.MiddleLeft);
-        currentColorLabel.color = new Color(1f, 1f, 1f, 0.58f);
-        SetRect(currentColorLabel.rectTransform, new Vector2(0f, 0.855f), new Vector2(0f, 0.855f),
-            new Vector2(180f, 32f), new Vector2(28f, 0f));
+        Text subtitle = CreateText("Paint Subtitle", toolPanel.transform, "BODY PAINT  /  MATCH THE WORLD", 13,
+            TextAnchor.MiddleCenter);
+        subtitle.color = new Color(1f, 1f, 1f, 0.48f);
+        subtitle.fontStyle = FontStyle.Bold;
+        SetRect(subtitle.rectTransform, new Vector2(0.5f, 0.895f), new Vector2(0.5f, 0.895f),
+            new Vector2(400f, 24f), Vector2.zero);
 
-        brushPreview = CreateImage("Current Color Preview", toolPanel.transform, brushColor);
+        Image currentCard = CreatePanel("Current Swatch Card", toolPanel.transform, new Color(0.055f, 0.095f, 0.105f, 0.96f));
+        SetRect(currentCard.rectTransform, new Vector2(0.5f, 0.785f), new Vector2(0.5f, 0.785f),
+            new Vector2(430f, 92f), Vector2.zero);
+        Outline currentOutline = currentCard.gameObject.AddComponent<Outline>();
+        currentOutline.effectColor = new Color(0.31f, 0.94f, 0.70f, 0.22f);
+        currentOutline.effectDistance = new Vector2(1f, -1f);
+
+        Text currentColorLabel = CreateText("Current Color Label", currentCard.transform, "CURRENT SWATCH", 14,
+            TextAnchor.MiddleLeft);
+        currentColorLabel.color = new Color(1f, 1f, 1f, 0.56f);
+        currentColorLabel.fontStyle = FontStyle.Bold;
+        SetRect(currentColorLabel.rectTransform, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f),
+            new Vector2(230f, 24f), new Vector2(102f, 22f));
+
+        brushPreview = CreateImage("Current Color Preview", currentCard.transform, brushColor);
         brushPreview.sprite = CircleSprite();
-        SetRect(brushPreview.rectTransform, new Vector2(0.145f, 0.79f), new Vector2(0.145f, 0.79f),
-            new Vector2(74f, 74f), Vector2.zero);
+        SetRect(brushPreview.rectTransform, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f),
+            new Vector2(68f, 68f), new Vector2(52f, 0f));
         Outline previewOutline = brushPreview.gameObject.AddComponent<Outline>();
         previewOutline.effectColor = new Color(1f, 1f, 1f, 0.92f);
-        previewOutline.effectDistance = new Vector2(3f, -3f);
+        previewOutline.effectDistance = new Vector2(2f, -2f);
 
-        Image hexCard = CreatePanel("Color Hex Card", toolPanel.transform, new Color(1f, 1f, 1f, 0.075f));
-        SetRect(hexCard.rectTransform, new Vector2(0.60f, 0.79f), new Vector2(0.60f, 0.79f),
-            new Vector2(250f, 62f), Vector2.zero);
+        Image hexCard = CreatePanel("Color Hex Card", currentCard.transform, new Color(1f, 1f, 1f, 0.075f));
+        SetRect(hexCard.rectTransform, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f),
+            new Vector2(238f, 42f), new Vector2(245f, -13f));
         brushHexText = CreateText("Color Hex", hexCard.transform, "#1F2933", 24, TextAnchor.MiddleCenter);
         brushHexText.fontStyle = FontStyle.Bold;
         Stretch(brushHexText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
 
+        Text currentHint = CreateText("Current Color Hint", currentCard.transform, "eyedropper or palette", 12,
+            TextAnchor.MiddleLeft);
+        currentHint.color = new Color(1f, 1f, 1f, 0.38f);
+        SetRect(currentHint.rectTransform, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f),
+            new Vector2(230f, 20f), new Vector2(102f, -28f));
+
+        Text paletteTitle = CreateText("Palette Title", toolPanel.transform, "QUICK PALETTE", 14, TextAnchor.MiddleLeft);
+        paletteTitle.color = new Color(0.42f, 1f, 0.72f, 0.86f);
+        paletteTitle.fontStyle = FontStyle.Bold;
+        SetRect(paletteTitle.rectTransform, new Vector2(0f, 0.713f), new Vector2(0f, 0.713f),
+            new Vector2(220f, 20f), new Vector2(28f, 0f));
+
+        Image paletteCard = CreatePanel("Palette Card", toolPanel.transform, new Color(0.035f, 0.058f, 0.066f, 0.96f));
+        SetRect(paletteCard.rectTransform, new Vector2(0.5f, 0.605f), new Vector2(0.5f, 0.605f),
+            new Vector2(430f, 148f), Vector2.zero);
+        Outline paletteOutline = paletteCard.gameObject.AddComponent<Outline>();
+        paletteOutline.effectColor = new Color(1f, 1f, 1f, 0.08f);
+        paletteOutline.effectDistance = new Vector2(1f, -1f);
+
         Color[] swatches =
         {
-            new Color(0.10f, 0.12f, 0.14f), Color.white, new Color(0.77f, 0.20f, 0.18f),
-            new Color(0.95f, 0.69f, 0.12f), new Color(0.18f, 0.63f, 0.30f),
-            new Color(0.13f, 0.42f, 0.80f), new Color(0.48f, 0.20f, 0.68f), new Color(0.42f, 0.23f, 0.12f)
+            new Color(0.10f, 0.12f, 0.14f), new Color(0.28f, 0.32f, 0.34f),
+            new Color(0.68f, 0.72f, 0.69f), new Color(0.96f, 0.95f, 0.88f),
+            new Color(0.77f, 0.20f, 0.18f), new Color(0.94f, 0.42f, 0.22f),
+            new Color(0.95f, 0.69f, 0.12f), new Color(0.97f, 0.86f, 0.32f),
+            new Color(0.18f, 0.63f, 0.30f), new Color(0.49f, 0.78f, 0.25f),
+            new Color(0.13f, 0.42f, 0.80f), new Color(0.25f, 0.72f, 0.87f),
+            new Color(0.48f, 0.20f, 0.68f), new Color(0.80f, 0.35f, 0.67f),
+            new Color(0.42f, 0.23f, 0.12f), new Color(0.78f, 0.49f, 0.24f)
         };
 
+        swatchColors.Clear();
+        swatchOutlines.Clear();
         for (int i = 0; i < swatches.Length; i++)
         {
             Color selected = swatches[i];
-            Button swatch = CreateButton("Swatch " + i, toolPanel.transform, selected, string.Empty, () => SetBrushColor(selected));
+            Button swatch = CreateButton("Swatch " + i, paletteCard.transform, selected, string.Empty, () => SetBrushColor(selected));
             swatch.image.sprite = CircleSprite();
-            float x = 0.14f + (i % 4) * 0.24f;
-            float y = i < 4 ? 0.675f : 0.565f;
+            float x = 0.105f + (i % 8) * 0.113f;
+            float y = i < 8 ? 0.68f : 0.32f;
             SetRect(swatch.GetComponent<RectTransform>(), new Vector2(x, y), new Vector2(x, y),
-                new Vector2(66f, 66f), Vector2.zero);
+                new Vector2(44f, 44f), Vector2.zero);
             Outline swatchOutline = swatch.gameObject.AddComponent<Outline>();
-            swatchOutline.effectDistance = new Vector2(3f, -3f);
+            swatchOutline.effectDistance = new Vector2(2f, -2f);
             swatchColors.Add(selected);
             swatchOutlines.Add(swatchOutline);
         }
 
-        Text brushSizeLabel = CreateText("Brush Size Label", toolPanel.transform, "BRUSH SIZE", 18,
-            TextAnchor.MiddleLeft);
-        brushSizeLabel.color = new Color(1f, 1f, 1f, 0.62f);
-        SetRect(brushSizeLabel.rectTransform, new Vector2(0f, 0.465f), new Vector2(0f, 0.465f),
-            new Vector2(180f, 34f), new Vector2(28f, 0f));
+        Text brushSection = CreateText("Brush Section", toolPanel.transform, "BRUSH / DETAIL", 14, TextAnchor.MiddleLeft);
+        brushSection.color = new Color(0.42f, 1f, 0.72f, 0.86f);
+        brushSection.fontStyle = FontStyle.Bold;
+        SetRect(brushSection.rectTransform, new Vector2(0f, 0.483f), new Vector2(0f, 0.483f),
+            new Vector2(220f, 20f), new Vector2(28f, 0f));
 
-        Button smallerBrush = CreateButton("Brush Smaller", toolPanel.transform, new Color(0.12f, 0.17f, 0.20f),
+        Image brushCard = CreatePanel("Brush Card", toolPanel.transform, new Color(0.035f, 0.058f, 0.066f, 0.96f));
+        SetRect(brushCard.rectTransform, new Vector2(0.5f, 0.365f), new Vector2(0.5f, 0.365f),
+            new Vector2(430f, 142f), Vector2.zero);
+        Outline brushCardOutline = brushCard.gameObject.AddComponent<Outline>();
+        brushCardOutline.effectColor = new Color(1f, 1f, 1f, 0.08f);
+        brushCardOutline.effectDistance = new Vector2(1f, -1f);
+
+        Text brushSizeLabel = CreateText("Brush Size Label", brushCard.transform, "BRUSH SIZE", 13, TextAnchor.MiddleLeft);
+        brushSizeLabel.color = new Color(1f, 1f, 1f, 0.56f);
+        brushSizeLabel.fontStyle = FontStyle.Bold;
+        SetRect(brushSizeLabel.rectTransform, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f),
+            new Vector2(130f, 24f), new Vector2(22f, 38f));
+
+        Button smallerBrush = CreateButton("Brush Smaller", brushCard.transform, new Color(0.12f, 0.17f, 0.20f),
             "-", () => AdjustBrushSize(-1));
-        SetRect(smallerBrush.GetComponent<RectTransform>(), new Vector2(0.14f, 0.375f), new Vector2(0.14f, 0.375f),
+        SetRect(smallerBrush.GetComponent<RectTransform>(), new Vector2(0f, 0.5f), new Vector2(0f, 0.5f),
             new Vector2(64f, 68f), Vector2.zero);
         smallerBrush.GetComponentInChildren<Text>().fontSize = 38;
 
-        Image sizeCard = CreatePanel("Brush Size Preview Card", toolPanel.transform, new Color(1f, 1f, 1f, 0.075f));
-        SetRect(sizeCard.rectTransform, new Vector2(0.50f, 0.375f), new Vector2(0.50f, 0.375f),
+        Image sizeCard = CreatePanel("Brush Size Preview Card", brushCard.transform, new Color(1f, 1f, 1f, 0.075f));
+        SetRect(sizeCard.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
             new Vector2(205f, 86f), Vector2.zero);
         Outline sizeCardOutline = sizeCard.gameObject.AddComponent<Outline>();
         sizeCardOutline.effectColor = new Color(1f, 1f, 1f, 0.16f);
@@ -688,20 +757,24 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
         SetRect(brushSizeText.rectTransform, new Vector2(0.70f, 0.5f), new Vector2(0.70f, 0.5f),
             new Vector2(100f, 50f), Vector2.zero);
 
-        Button largerBrush = CreateButton("Brush Larger", toolPanel.transform, new Color(0.12f, 0.17f, 0.20f),
+        Button largerBrush = CreateButton("Brush Larger", brushCard.transform, new Color(0.12f, 0.17f, 0.20f),
             "+", () => AdjustBrushSize(1));
-        SetRect(largerBrush.GetComponent<RectTransform>(), new Vector2(0.86f, 0.375f), new Vector2(0.86f, 0.375f),
+        SetRect(largerBrush.GetComponent<RectTransform>(), new Vector2(1f, 0.5f), new Vector2(1f, 0.5f),
             new Vector2(64f, 68f), Vector2.zero);
         largerBrush.GetComponentInChildren<Text>().fontSize = 34;
 
-        brushSizeSlider = CreateSlider("Brush Size Slider", toolPanel.transform, new Vector2(0.5f, 0.285f),
+        brushSizeSlider = CreateSlider("Brush Size Slider", brushCard.transform, new Vector2(0.5f, 0.16f),
             new Vector2(360f, 42f), MinimumBrushRadius, MaximumBrushRadius, brushRadius, SetBrushSize);
         brushSizeSlider.wholeNumbers = true;
 
-        surfaceText = CreateText("Surface Label", toolPanel.transform, "GLOSS 24%", 18, TextAnchor.MiddleLeft);
-        SetRect(surfaceText.rectTransform, new Vector2(0f, 0.205f), new Vector2(0f, 0.205f),
-            new Vector2(145f, 40f), new Vector2(28f, 0f));
-        CreateSlider("Surface", toolPanel.transform, new Vector2(0.68f, 0.205f), new Vector2(230f, 40f), 0f, 1f, smoothness,
+        Image surfaceCard = CreatePanel("Surface Card", toolPanel.transform, new Color(0.035f, 0.058f, 0.066f, 0.96f));
+        SetRect(surfaceCard.rectTransform, new Vector2(0.5f, 0.205f), new Vector2(0.5f, 0.205f),
+            new Vector2(430f, 48f), Vector2.zero);
+        surfaceText = CreateText("Surface Label", surfaceCard.transform, "GLOSS 24%", 14, TextAnchor.MiddleLeft);
+        surfaceText.fontStyle = FontStyle.Bold;
+        SetRect(surfaceText.rectTransform, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f),
+            new Vector2(130f, 32f), new Vector2(22f, 0f));
+        CreateSlider("Surface", surfaceCard.transform, new Vector2(0.68f, 0.5f), new Vector2(230f, 34f), 0f, 1f, smoothness,
             value =>
             {
                 smoothness = value;
@@ -709,24 +782,50 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
                 mannequin.SetMaterialResponse(metallic, smoothness);
             });
 
-        sampleButton = CreateButton("3D Eyedropper", toolPanel.transform, new Color(0.12f, 0.48f, 0.58f),
-            "EYEDROPPER", BeginSample);
-        SetRect(sampleButton.GetComponent<RectTransform>(), new Vector2(0.25f, 0.09f), new Vector2(0.25f, 0.09f),
-            new Vector2(205f, 72f), Vector2.zero);
-        sampleButtonText = sampleButton.GetComponentInChildren<Text>();
-        sampleButtonText.fontSize = 20;
+        Image historyCard = CreatePanel("Paint History Card", toolPanel.transform, new Color(0.035f, 0.058f, 0.066f, 0.96f));
+        SetRect(historyCard.rectTransform, new Vector2(0.5f, 0.075f), new Vector2(0.5f, 0.075f),
+            new Vector2(430f, 82f), Vector2.zero);
+        Outline historyOutline = historyCard.gameObject.AddComponent<Outline>();
+        historyOutline.effectColor = new Color(1f, 1f, 1f, 0.08f);
+        historyOutline.effectDistance = new Vector2(1f, -1f);
 
-        undoButton = CreateButton("Undo Paint", toolPanel.transform, new Color(0.28f, 0.30f, 0.33f),
-            "UNDO", UndoPaint);
-        SetRect(undoButton.GetComponent<RectTransform>(), new Vector2(0.665f, 0.09f), new Vector2(0.665f, 0.09f),
-            new Vector2(92f, 72f), Vector2.zero);
+        sampleButton = CreateButton("3D Eyedropper", historyCard.transform, new Color(0.12f, 0.48f, 0.58f),
+            "EYEDROPPER\nPICK 3D COLOR", BeginSample);
+        SetRect(sampleButton.GetComponent<RectTransform>(), new Vector2(0f, 0.5f), new Vector2(0f, 0.5f),
+            new Vector2(174f, 62f), new Vector2(16f, 0f));
+        sampleButtonText = sampleButton.GetComponentInChildren<Text>();
+        sampleButtonText.fontSize = 16;
+
+        undoButton = CreateButton("Undo Paint", historyCard.transform, new Color(0.15f, 0.20f, 0.22f),
+            "↶\nUNDO", UndoPaint);
+        SetRect(undoButton.GetComponent<RectTransform>(), new Vector2(0f, 0.5f), new Vector2(0f, 0.5f),
+            new Vector2(66f, 62f), new Vector2(204f, 0f));
         undoButton.GetComponentInChildren<Text>().fontSize = 18;
 
-        Button clearButton = CreateButton("Clear Body", toolPanel.transform, new Color(0.38f, 0.25f, 0.27f),
+        redoButton = CreateButton("Redo Paint", historyCard.transform, new Color(0.15f, 0.20f, 0.22f),
+            "↷\nREDO", RedoPaint);
+        SetRect(redoButton.GetComponent<RectTransform>(), new Vector2(0f, 0.5f), new Vector2(0f, 0.5f),
+            new Vector2(66f, 62f), new Vector2(276f, 0f));
+        redoButton.GetComponentInChildren<Text>().fontSize = 18;
+
+        Button clearButton = CreateButton("Clear Body", historyCard.transform, new Color(0.38f, 0.25f, 0.27f),
             "CLEAR", ClearBody);
-        SetRect(clearButton.GetComponent<RectTransform>(), new Vector2(0.885f, 0.09f), new Vector2(0.885f, 0.09f),
-            new Vector2(92f, 72f), Vector2.zero);
-        clearButton.GetComponentInChildren<Text>().fontSize = 18;
+        SetRect(clearButton.GetComponent<RectTransform>(), new Vector2(0f, 0.5f), new Vector2(0f, 0.5f),
+            new Vector2(76f, 62f), new Vector2(348f, 0f));
+        clearButton.GetComponentInChildren<Text>().fontSize = 14;
+
+        historyText = CreateText("History Count", toolPanel.transform, "0 / " + MaximumPaintUndoSteps, 12, TextAnchor.MiddleRight);
+        historyText.color = new Color(1f, 1f, 1f, 0.38f);
+        historyText.fontStyle = FontStyle.Bold;
+        SetRect(historyText.rectTransform, new Vector2(1f, 0.135f), new Vector2(1f, 0.135f),
+            new Vector2(120f, 22f), new Vector2(-26f, 0f));
+
+        brushModeButton = CreateButton("Brush Lock", paintHud.transform, new Color(0.16f, 0.70f, 0.42f),
+            "BRUSH\nLOCKED", TogglePaintBrushMode);
+        SetRect(brushModeButton.GetComponent<RectTransform>(), new Vector2(0.64f, 0.065f),
+            new Vector2(0.64f, 0.065f), new Vector2(170f, 80f), Vector2.zero);
+        brushModeButtonText = brushModeButton.GetComponentInChildren<Text>();
+        brushModeButtonText.fontSize = 17;
 
         Button pose = CreateButton("Paint Pose", paintHud.transform, new Color(0.53f, 0.35f, 0.72f), "POSE", TogglePosePanel);
         SetRect(pose.GetComponent<RectTransform>(), new Vector2(0.77f, 0.065f), new Vector2(0.77f, 0.065f), new Vector2(170f, 80f), Vector2.zero);
@@ -734,9 +833,9 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
         SetRect(done.GetComponent<RectTransform>(), new Vector2(0.89f, 0.065f), new Vector2(0.89f, 0.065f), new Vector2(170f, 80f), Vector2.zero);
 
         var instruction = CreateText("Paint Instruction", paintHud.transform,
-            "Drag body to paint  ·  Swipe outside to rotate  ·  Eyedropper copies visible object color", 19,
+            "BRUSH LOCKED: DRAG BODY TO PAINT   ·   TAP BRUSH TO UNLOCK CAMERA   ·   HISTORY ARROWS RESTORE YOUR LAST MOVES", 17,
             TextAnchor.MiddleCenter);
-        instruction.color = new Color(1f, 1f, 1f, 0.68f);
+        instruction.color = new Color(1f, 1f, 1f, 0.58f);
         SetRect(instruction.rectTransform, new Vector2(0.64f, 0.87f), new Vector2(0.64f, 0.87f),
             new Vector2(820f, 44f), Vector2.zero);
 
@@ -883,11 +982,12 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
             if (orbitDown != null && orbitDown.IsPressed) pitchDelta -= 45f * Time.deltaTime;
         }
 
-        if (cameraRig != null)
+        bool paintLocksCamera = playMode == PlayMode.Paint && paintBrushMode;
+        if (cameraRig != null && !paintLocksCamera)
         {
             cameraRig.AddOrbitInput(new Vector2(yawDelta, pitchDelta));
         }
-        else
+        else if (cameraRig == null && !paintLocksCamera)
         {
             cameraYaw += yawDelta;
             cameraPitch -= pitchDelta;
@@ -929,6 +1029,14 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
 
     private void UpdatePaintingInput()
     {
+        if (!paintBrushMode)
+        {
+            // In camera mode every non-UI swipe is owned by the orbit rig. A
+            // brush stroke cannot start until the BRUSH button is locked again.
+            EndStroke();
+            return;
+        }
+
         if (ChameleonInput.TouchCount > 0)
         {
             if (activeTouchId < 0)
@@ -987,19 +1095,6 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
                 {
                     TryPaintAt(touch.Position, false);
                 }
-                else if (!pointerStartedAsSample)
-                {
-                    if (cameraRig != null)
-                    {
-                        cameraRig.AddOrbitInput(new Vector2(touch.DeltaPosition.x * 0.13f,
-                            -touch.DeltaPosition.y * 0.10f));
-                    }
-                    else
-                    {
-                        cameraYaw += touch.DeltaPosition.x * 0.13f;
-                        cameraPitch -= touch.DeltaPosition.y * 0.10f;
-                    }
-                }
                 return;
             }
 
@@ -1040,19 +1135,6 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
         {
             TryPaintAt(ChameleonInput.MousePosition, false);
         }
-        else if (ChameleonInput.GetMouseButton(0) && !touchStartedOnBody && !pointerStartedAsSample)
-        {
-            Vector2 mouseDelta = ChameleonInput.MouseDelta;
-            if (cameraRig != null)
-            {
-                cameraRig.AddOrbitInput(new Vector2(mouseDelta.x * 0.18f, -mouseDelta.y * 0.15f));
-            }
-            else
-            {
-                cameraYaw += mouseDelta.x * 0.18f;
-                cameraPitch -= mouseDelta.y * 0.15f;
-            }
-        }
         else if (ChameleonInput.GetMouseButtonUp(0))
         {
             EndStroke();
@@ -1065,13 +1147,20 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
 
         if (sampleEnvironment)
         {
-            if (!TryGetEyedropperSurface(ray, out _))
+            if (!TryGetEyedropperSurface(ray, out RaycastHit sampleHit))
             {
                 statusText.text = "EYEDROPPER — aim away from your body and tap a visible object.";
                 return false;
             }
 
             sampleEnvironment = false;
+            if (TrySampleSurfaceColor(sampleHit, out Color sampledColor))
+            {
+                SetBrushColor(sampledColor);
+                statusText.text = "SURFACE COLOR PICKED — paint now uses the tapped material color.";
+                return false;
+            }
+
             if (screenColorSampleRoutine != null)
             {
                 StopCoroutine(screenColorSampleRoutine);
@@ -1109,7 +1198,10 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
             lastPaintUv = uv;
         }
 
-        part.PaintStroke(lastPaintUv, uv, brushColor, brushRadius);
+        // Pass the hit normal so a cube's overlapping face UVs cannot color
+        // its side/back faces along with the face currently under the pointer.
+        part.PaintStroke(lastPaintUv, uv, brushColor, brushRadius, hit.normal);
+        PaintVisibleScreenNeighbors(screenPosition, hit.collider, brushColor, brushRadius);
         lastPaintPart = part;
         lastPaintUv = uv;
         return true;
@@ -1144,6 +1236,99 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
         }
 
         return false;
+    }
+
+    private bool TrySampleSurfaceColor(RaycastHit surfaceHit, out Color sampledColor)
+    {
+        sampledColor = Color.white;
+        Renderer renderer = surfaceHit.collider.GetComponent<Renderer>();
+        if (renderer == null)
+        {
+            renderer = surfaceHit.collider.GetComponentInParent<Renderer>();
+        }
+
+        if (renderer == null)
+        {
+            return false;
+        }
+
+        Material material = renderer.sharedMaterial;
+        if (material == null)
+        {
+            return false;
+        }
+
+        Color baseColor = Color.white;
+        if (material.HasProperty("_BaseColor"))
+        {
+            baseColor = material.GetColor("_BaseColor");
+        }
+        else if (material.HasProperty("_Color"))
+        {
+            baseColor = material.GetColor("_Color");
+        }
+
+        Texture texture = null;
+        if (material.HasProperty("_BaseMap"))
+        {
+            texture = material.GetTexture("_BaseMap");
+        }
+        else if (material.HasProperty("_MainTex"))
+        {
+            texture = material.GetTexture("_MainTex");
+        }
+
+        if (texture is Texture2D texture2D && texture2D.isReadable)
+        {
+            Color texel = texture2D.GetPixelBilinear(surfaceHit.textureCoord.x, surfaceHit.textureCoord.y);
+            sampledColor = new Color(baseColor.r * texel.r, baseColor.g * texel.g, baseColor.b * texel.b, 1f);
+            return true;
+        }
+
+        sampledColor = new Color(baseColor.r, baseColor.g, baseColor.b, 1f);
+        return true;
+    }
+
+    private void PaintVisibleScreenNeighbors(Vector2 screenPosition, Collider centerCollider, Color color, int radius)
+    {
+        float normalizedSize = Mathf.InverseLerp(MinimumBrushRadius, MaximumBrushRadius, radius);
+        float screenRadius = Mathf.Lerp(4f, 16f, normalizedSize);
+        float diagonal = screenRadius * 0.7071f;
+        Vector2[] offsets =
+        {
+            new Vector2(screenRadius, 0f),
+            new Vector2(-screenRadius, 0f),
+            new Vector2(0f, screenRadius),
+            new Vector2(0f, -screenRadius),
+            new Vector2(diagonal, diagonal),
+            new Vector2(diagonal, -diagonal),
+            new Vector2(-diagonal, diagonal),
+            new Vector2(-diagonal, -diagonal)
+        };
+
+        int dotRadius = Mathf.Max(2, Mathf.RoundToInt(radius * 0.34f));
+        for (int i = 0; i < offsets.Length; i++)
+        {
+            Ray sampleRay = gameCamera.ScreenPointToRay(screenPosition + offsets[i]);
+            if (!Physics.Raycast(sampleRay, out RaycastHit hit, 50f, 1 << RuntimeMannequin.PaintLayer,
+                    QueryTriggerInteraction.Collide))
+            {
+                continue;
+            }
+
+            if (hit.collider == null || hit.collider == centerCollider)
+            {
+                continue;
+            }
+
+            PaintableBodyPart part = hit.collider.GetComponent<PaintableBodyPart>();
+            if (part == null)
+            {
+                continue;
+            }
+
+            part.PaintStroke(hit.textureCoord, hit.textureCoord, color, dotRadius, hit.normal);
+        }
     }
 
     private void EndStroke()
@@ -1196,7 +1381,7 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
         }
 
         cameraRig.SetAttachedMode(attached);
-        Vector3 targetOffset = (playMode == PlayMode.Paint || attached)
+        Vector3 targetOffset = attached
             ? GetMannequinVisualCenterOffset()
             : Vector3.up * (1.15f * CharacterScale);
         if (attached)
@@ -1230,12 +1415,6 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
         }
 
         return hasBounds ? combined.center - playerRoot.position : Vector3.up * (1.05f * CharacterScale);
-    }
-
-    private IEnumerator RefreshCameraAfterPose()
-    {
-        yield return null;
-        RefreshCameraComposition(true);
     }
 
     private void ToggleAttach()
@@ -1320,7 +1499,6 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
         poseText.text = "POSE: " + mannequin.GetPoseName();
         posePanel.SetActive(false);
         statusText.text = mannequin.GetPoseName() + " pose selected. Paint for this silhouette.";
-        StartCoroutine(RefreshCameraAfterPose());
     }
 
     private void SetPlayMode(PlayMode mode)
@@ -1336,32 +1514,49 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
         if (painting)
         {
             hasLatchedMovementHeading = false;
-            cameraYaw = playerRoot.eulerAngles.y;
-            cameraPitch = 9f;
+            paintBrushMode = true;
             if (cameraRig != null)
             {
                 cameraRig.ClearMovementHeading();
-                cameraRig.SetFocusedMode(true);
                 cameraRig.SetLegacyPointerInputEnabled(false);
-                RefreshCameraComposition(false);
-                cameraRig.SetOrbitAngles(playerRoot.eulerAngles.y, 9f, true);
             }
             modeText.text = "PAINT MODE — BODY SURFACE";
-            statusText.text = "Paint the body, adjust BRUSH SIZE, or use EYEDROPPER to copy an object color.";
+            statusText.text = "BRUSH LOCKED — choose a color and drag the body to paint. Tap BRUSH to orbit.";
         }
         else
         {
+            paintBrushMode = false;
             if (cameraRig != null)
             {
-                cameraRig.SetFocusedMode(false);
                 cameraRig.SetLegacyPointerInputEnabled(true);
-                RefreshCameraComposition(true);
             }
             modeText.text = attached ? "HIDING / ATTACHED" : "EXPLORE 3D MAP";
             statusText.text = attached
                 ? "Paint saved. Stay attached or detach to move."
                 : "Find a surface, choose a pose, then paint your body.";
         }
+        RefreshPaintToolUi();
+    }
+
+    private void TogglePaintBrushMode()
+    {
+        if (playMode != PlayMode.Paint)
+        {
+            return;
+        }
+
+        CancelSample();
+        EndStroke();
+        paintBrushMode = !paintBrushMode;
+        if (cameraRig != null)
+        {
+            cameraRig.SetLegacyPointerInputEnabled(!paintBrushMode);
+        }
+
+        RefreshPaintToolUi();
+        statusText.text = paintBrushMode
+            ? "BRUSH LOCKED — drag the body to paint."
+            : "CAMERA FREE — swipe the world to orbit; tap BRUSH to paint again.";
     }
 
     private void BeginSample()
@@ -1518,12 +1713,38 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
 
         if (sampleButtonText != null)
         {
-            sampleButtonText.text = sampleEnvironment ? "TAP OBJECT..." : "EYEDROPPER";
+            sampleButtonText.text = sampleEnvironment
+                ? "TAP OBJECT..."
+                : "EYEDROPPER\nPICK 3D COLOR";
         }
 
         if (undoButton != null)
         {
             undoButton.interactable = paintUndoHistory.Count > 0;
+        }
+
+        if (redoButton != null)
+        {
+            redoButton.interactable = paintRedoHistory.Count > 0;
+        }
+
+        if (brushModeButton != null)
+        {
+            brushModeButton.image.color = paintBrushMode
+                ? new Color(0.16f, 0.70f, 0.42f)
+                : new Color(0.18f, 0.42f, 0.70f);
+        }
+
+        if (brushModeButtonText != null)
+        {
+            brushModeButtonText.text = paintBrushMode
+                ? "BRUSH\nLOCKED"
+                : "CAMERA\nFREE";
+        }
+
+        if (historyText != null)
+        {
+            historyText.text = paintUndoHistory.Count + " / " + MaximumPaintUndoSteps + " HISTORY";
         }
     }
 
@@ -1540,26 +1761,30 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
 
     private void CapturePaintUndoState()
     {
-        if (mannequin == null)
+        PaintUndoState state = CaptureCurrentPaintState();
+        if (state == null)
         {
             return;
         }
 
-        PaintUndoState state;
-        if (paintUndoPool.Count > 0)
+        // A new stroke creates a new branch. Photoshop-style editors discard
+        // the forward history as soon as the user paints after an undo.
+        ClearRedoHistory();
+        paintUndoHistory.Add(state);
+        TrimPaintHistory(paintUndoHistory);
+        RefreshPaintToolUi();
+    }
+
+    private PaintUndoState CaptureCurrentPaintState()
+    {
+        if (mannequin == null)
         {
-            state = paintUndoPool.Pop();
-        }
-        else if (paintUndoHistory.Count >= MaximumPaintUndoSteps)
-        {
-            state = paintUndoHistory[0];
-            paintUndoHistory.RemoveAt(0);
-        }
-        else
-        {
-            state = CreatePaintUndoState();
+            return null;
         }
 
+        PaintUndoState state = paintUndoPool.Count > 0
+            ? paintUndoPool.Pop()
+            : CreatePaintUndoState();
         bool capturedAny = false;
         for (int i = 0; i < state.Textures.Count; i++)
         {
@@ -1572,17 +1797,64 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
 
         if (!capturedAny)
         {
+            ReleasePaintUndoState(state);
+            return null;
+        }
+
+        return state;
+    }
+
+    private void TrimPaintHistory(List<PaintUndoState> history)
+    {
+        while (history.Count > MaximumPaintUndoSteps)
+        {
+            PaintUndoState oldest = history[0];
+            history.RemoveAt(0);
+            ReleasePaintUndoState(oldest);
+        }
+    }
+
+    private void ClearRedoHistory()
+    {
+        for (int i = 0; i < paintRedoHistory.Count; i++)
+        {
+            ReleasePaintUndoState(paintRedoHistory[i]);
+        }
+
+        paintRedoHistory.Clear();
+    }
+
+    private void ReleasePaintUndoState(PaintUndoState state)
+    {
+        if (state != null)
+        {
             paintUndoPool.Push(state);
+        }
+    }
+
+    private static void RestorePaintUndoState(PaintUndoState state)
+    {
+        if (state == null)
+        {
             return;
         }
 
-        paintUndoHistory.Add(state);
-        RefreshPaintToolUi();
+        for (int i = 0; i < state.Textures.Count; i++)
+        {
+            PaintTextureSnapshot snapshot = state.Textures[i];
+            if (snapshot.Part == null || snapshot.Pixels == null)
+            {
+                continue;
+            }
+
+            snapshot.Part.RestorePaintPixels(snapshot.Pixels);
+        }
     }
 
     private void PreparePaintUndoBuffers()
     {
         paintUndoHistory.Clear();
+        paintRedoHistory.Clear();
         paintUndoPool.Clear();
         for (int i = 0; i < MaximumPaintUndoSteps; i++)
         {
@@ -1632,23 +1904,50 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
             return;
         }
 
+        PaintUndoState current = CaptureCurrentPaintState();
+        if (current == null)
+        {
+            statusText.text = "Undo is unavailable while the paint atlas is busy.";
+            return;
+        }
+
         int lastIndex = paintUndoHistory.Count - 1;
         PaintUndoState state = paintUndoHistory[lastIndex];
         paintUndoHistory.RemoveAt(lastIndex);
-        for (int i = 0; i < state.Textures.Count; i++)
-        {
-            PaintTextureSnapshot snapshot = state.Textures[i];
-            if (snapshot.Part == null || snapshot.Pixels == null)
-            {
-                continue;
-            }
+        RestorePaintUndoState(state);
+        paintRedoHistory.Add(current);
+        TrimPaintHistory(paintRedoHistory);
+        ReleasePaintUndoState(state);
+        RefreshPaintToolUi();
+        statusText.text = "Undo — last paint stroke restored.";
+    }
 
-            snapshot.Part.RestorePaintPixels(snapshot.Pixels);
+    private void RedoPaint()
+    {
+        CancelSample();
+        EndStroke();
+        if (paintRedoHistory.Count == 0)
+        {
+            statusText.text = "Nothing to redo.";
+            return;
         }
 
-        paintUndoPool.Push(state);
+        PaintUndoState current = CaptureCurrentPaintState();
+        if (current == null)
+        {
+            statusText.text = "Redo is unavailable while the paint atlas is busy.";
+            return;
+        }
+
+        int lastIndex = paintRedoHistory.Count - 1;
+        PaintUndoState state = paintRedoHistory[lastIndex];
+        paintRedoHistory.RemoveAt(lastIndex);
+        RestorePaintUndoState(state);
+        paintUndoHistory.Add(current);
+        TrimPaintHistory(paintUndoHistory);
+        ReleasePaintUndoState(state);
         RefreshPaintToolUi();
-        statusText.text = "Last paint stroke restored.";
+        statusText.text = "Redo — paint stroke restored.";
     }
 
     private void ClearBody()
@@ -2023,18 +2322,22 @@ public sealed class ChameleonPrototypeController : MonoBehaviour
             UndoPaint();
             Color32 restoredUndoAudit = undoAuditTexture.GetPixel(undoAuditTexture.width / 2,
                 undoAuditTexture.height / 2);
+            RedoPaint();
+            Color32 redoneUndoAudit = undoAuditTexture.GetPixel(undoAuditTexture.width / 2,
+                undoAuditTexture.height / 2);
+            UndoPaint();
             undoAuditPart.PaintStroke(Vector2.one * 0.10f, Vector2.one * 0.10f, Color.cyan, 4);
             Color32 restoredAfterNextStroke = undoAuditTexture.GetPixel(undoAuditTexture.width / 2,
                 undoAuditTexture.height / 2);
             if (paintedUndoAudit.Equals(beforeUndoAudit) || !restoredUndoAudit.Equals(beforeUndoAudit) ||
-                !restoredAfterNextStroke.Equals(beforeUndoAudit))
+                !redoneUndoAudit.Equals(paintedUndoAudit) || !restoredAfterNextStroke.Equals(beforeUndoAudit))
             {
                 throw new System.InvalidOperationException(
-                    "CHAMELEON_PAINT_TOOLS_AUDIT_FAIL: undo did not persist in the CPU-backed paint atlas.");
+                    "CHAMELEON_PAINT_TOOLS_AUDIT_FAIL: undo/redo did not persist in the CPU-backed paint atlas.");
             }
         }
 
-        Debug.Log("CHAMELEON_PAINT_TOOLS_AUDIT_PASS: brush range, live preview, HEX color, and undo are synchronized.");
+        Debug.Log("CHAMELEON_PAINT_TOOLS_AUDIT_PASS: brush range, live preview, HEX color, and undo/redo are synchronized.");
         Color[] smokeColors =
         {
             new Color(0.10f, 0.18f, 0.29f),
