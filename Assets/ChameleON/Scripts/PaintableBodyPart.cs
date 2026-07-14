@@ -384,6 +384,51 @@ public sealed class PaintableBodyPart : MonoBehaviour
             material.SetFloat("_ReceiveShadows", 0f);
         }
 
+        if (material.HasProperty("_Surface"))
+        {
+            material.SetFloat("_Surface", 0f);
+        }
+
+        if (material.HasProperty("_Blend"))
+        {
+            material.SetFloat("_Blend", 0f);
+        }
+
+        if (material.HasProperty("_AlphaClip"))
+        {
+            material.SetFloat("_AlphaClip", 0f);
+        }
+
+        if (material.HasProperty("_SrcBlend"))
+        {
+            material.SetFloat("_SrcBlend", 1f);
+        }
+
+        if (material.HasProperty("_DstBlend"))
+        {
+            material.SetFloat("_DstBlend", 0f);
+        }
+
+        if (material.HasProperty("_ZWrite"))
+        {
+            material.SetFloat("_ZWrite", 1f);
+        }
+
+        if (material.HasProperty("_Cull"))
+        {
+            // Some imported stick-man meshes are almost flat. Rendering both
+            // sides prevents them from disappearing when the camera sees the
+            // reverse face.
+            material.SetFloat("_Cull", 0f);
+        }
+
+        material.DisableKeyword("_SURFACE_TYPE_TRANSPARENT");
+        material.DisableKeyword("_ALPHATEST_ON");
+        material.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+        material.DisableKeyword("_ALPHAMODULATE_ON");
+        material.renderQueue = -1;
+        material.doubleSidedGI = true;
+
         if (material.HasProperty("_EmissionMap"))
         {
             Texture paintTexture = null;
